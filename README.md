@@ -17,7 +17,9 @@ No host Python/Node, environment-file copy or manual migration is required. Afte
 - API docs: http://localhost:8000/api/docs
 - Readiness: http://localhost:8000/api/health
 
-Create a meeting with title, start, end and attendee count. Reload the page: it should still appear. An empty database has no sample meetings.
+Create a meeting with title, start, end and attendee count. Reload the page: it should still appear. Use a meeting's Delete control and confirm to permanently remove it; cancellation makes no request. An empty database has no sample meetings.
+
+The page uses a retro 2000s desktop/web style: glossy title bars, beveled controls and colorful appointment panels. This is a user-requested redesign, not a claim of matching the missing lab reference screenshots.
 
 ## Structure
 
@@ -33,7 +35,9 @@ The first three migration files are preserved from the course repository. A forw
 
 `GET /api/meetings` returns an ordered JSON array. `POST /api/meetings` accepts exactly `title`, `starts_at`, `ends_at`, `attendee_count` and returns those fields plus a UUID `id` with HTTP 201. Dates require a timezone and responses use UTC. End must follow start; title must contain 1–200 trimmed characters; count must be a nonnegative integer. Invalid requests return 422. Database failures return 503.
 
-No authentication, participant management, editing/deletion or analytics are in this slice.
+`DELETE /api/meetings/{meeting_id}` permanently deletes one meeting by UUID and returns HTTP 204 with no body. A missing/already-deleted UUID returns 404 (`Meeting not found`); malformed UUID returns 422; database failures return 503. The UI confirms before deleting, prevents duplicate requests and keeps the meeting visible if deletion fails. An already-deleted meeting is removed from a stale local list with an explicit message.
+
+**No accounts or author protection:** anyone with API access can delete any meeting. This is the user's requested fallback, not ownership enforcement. Do not use the workspace for sensitive shared data or expose it publicly without reviewing authentication/access controls. Participant management, editing and analytics remain out of scope.
 
 ## Operations and troubleshooting
 
@@ -54,7 +58,7 @@ The `spry` development credentials, Vite server, local CORS origin and published
 
 ## Remaining lab deliverables
 
-Local validation passed: 41 backend tests, 15 frontend tests, Ruff/ESLint/Prettier, production frontend build, three-service Docker startup, API create/list/validation, persistence after restart, and database-outage 503/recovery. A local screenshot was captured; it is not a match to the Lab 1 reference images, which have not been supplied.
+The original list/create milestone passed 41 backend tests, 15 frontend tests, Ruff/ESLint/Prettier, production frontend build, three-service Docker startup, API create/list/validation, persistence after restart, and database-outage 503/recovery. The deletion/retro-design extension passed 48 backend and 23 frontend tests, Ruff/ESLint/Prettier and a production build on pinned Node 24.0.0 (including frontend tests in a non-UTC timezone). Real Chrome checks passed creation/reload, cancellation, confirmed deletion, duplicate protection, preserved draft input, simulated 503 retention and another client's 404. Deleted rows stayed absent after all three services restarted; existing meetings were retained. Mobile layouts at 390px and 320px had no horizontal overflow. No schema migrations or dependency versions changed. Lab 1 reference images have not been supplied, so reference-style compliance is unverified.
 
 Later stages still require reference-image styling, a deliberately failing then fixed lint run, reviewed Makefile deploy targets, AWS budget/security setup, production PostgreSQL hosting, private S3/CloudFront frontend, ECR/ECS Fargate backend behind an ALB, your own HTTPS domains and main-branch GitHub OIDC deployment. No production resources have been provisioned by this local setup.
 

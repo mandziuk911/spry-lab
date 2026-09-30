@@ -10,6 +10,21 @@ export async function listMeetings(signal?: AbortSignal): Promise<Meeting[]> {
   return response.json() as Promise<Meeting[]>
 }
 
+export type DeleteMeetingResult = "deleted" | "already-removed"
+
+export async function deleteMeeting(id: Meeting["id"]): Promise<DeleteMeetingResult> {
+  try {
+    const response = await fetch(`${meetingsUrl()}/${encodeURIComponent(id)}`, { method: "DELETE" })
+    if (response.status === 204) return "deleted"
+    if (response.status === 404) return "already-removed"
+    throw new Error("Deletion failed")
+  } catch {
+    throw new Error(
+      "Could not delete the meeting. It has been kept on your desk. Check your connection and try again.",
+    )
+  }
+}
+
 export async function createMeeting(meeting: CreateMeeting): Promise<void> {
   const response = await fetch(meetingsUrl(), {
     method: "POST",

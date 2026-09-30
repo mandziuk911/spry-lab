@@ -16,14 +16,14 @@ After approval, adapt the inherited application deliberately:
 
 - Keep FastAPI, SQLAlchemy, Alembic, React, Vite, Tailwind and needed shadcn/ui components.
 - Retain Python `pyproject.toml`/`uv.lock` and frontend `package.json`/`package-lock.json`; make dependency installation reproducible.
-- The active slice has only list/create meetings, one page, and a supporting health endpoint. Remove inherited authentication/ownership coupling, participant management, editing/deletion and extra application routes from this slice. Replace tests that assert those superseded contracts with tests of the contract below.
+- The active slice has list/create/delete meetings, one page, and a supporting health endpoint. The human requested deletion and a retro 2000s redesign as a follow-up amendment. Remove inherited authentication/ownership coupling, participant management, editing and extra application routes from this slice. Replace tests that assert those superseded contracts with tests of the contract below. Deletion is deliberately unauthenticated, not restricted to an author; do not simulate ownership with browser storage.
 - Keep UUID meeting identifiers from the source: the assignment specifies an id but does not require integers. Store `attendee_count` as an integer rather than deriving it from participant records.
 - Preserve existing migration files. Add a forward migration, never rewrite applied migration history. Preserve existing meetings and identifiers; backfill counts from existing participant associations before removing obsolete relationships/tables. Remove obsolete non-null ownership/location requirements. Define a real downgrade or explicitly document any irreversible data loss. Review this migration separately before execution on any database with valuable data.
 - Local frontend serving becomes Vite on port 5173. Remove the local Nginx configuration and proxy dependency; no reverse proxy is needed for this slice. Production frontend deployment will use S3/CloudFront, not a server container.
 - Keep inherited CI/Makefile/infra files as source material, not as evidence that deployment works. Update their references only when needed, and review their AWS behavior before running any provisioning or deployment target. Do not add Cognito, Lambda or unrelated infrastructure to the required ECS/S3 deployment.
 - Root standalone `main.py` and `pyproject.toml`, Lambda-specific files and seed logic are not part of the slice. Remove them after confirming no retained tooling needs them. No seeding is needed.
 
-No Redis, Celery, cache, extra database, Kubernetes, authentication or invented analytics. Do not invent week-over-week numbers. Reference-image styling comes after functionality, when the Lab 1 screenshots are supplied.
+No Redis, Celery, cache, extra database, Kubernetes, authentication or invented analytics. Do not invent week-over-week numbers. The human now requests a 2000–2010 retro desktop/web design instead of minimalism: glossy gradients, beveled controls, strong panel borders, readable system fonts and responsive layouts. Reference-image compliance remains unverified; this customized design is not claimed to match missing Lab 1 screenshots.
 
 ## 3. Version policy
 
@@ -58,7 +58,7 @@ Every generated or retained active folder must have a purpose below. Do not crea
 | back/ | API, migrations, dependency manifest/lock and Dockerfile. |
 | back/app/ | Python package containing app assembly, environment configuration, ORM engine/session lifecycle, table models and validation schemas. Existing main.py/config.py/db.py/models.py/schemas.py separate these concerns. |
 | back/app/routers/ | HTTP layer: meetings routes and health, validation/status codes, not schema creation or business SQL. |
-| back/app/services/ | Meeting listing/creation, transaction boundaries and storage-error handling. |
+| back/app/services/ | Meeting listing/creation/deletion, transaction boundaries and storage-error handling. |
 | back/alembic/ | Migration environment and template; obtain database URL from environment. |
 | back/alembic/versions/ | Preserved schema history plus reviewed forward migration for this slice. |
 | back/tests/ | API validation, persistence and health/error-contract checks. |
@@ -114,6 +114,10 @@ HTTP 200, application/json array. Each element contains exactly the five fields 
 
 JSON object with exactly title, starts_at, ends_at and attendee_count; all required. Reject unknown fields including id. Validate before writing, commit one meeting, return HTTP 201 with the complete five-field object. Validation failures return HTTP 422 with FastAPI's standard validation detail array. Database unavailability returns HTTP 503 with a generic detail message. No ownership or participant IDs.
 
+### DELETE /api/meetings/{meeting_id}
+
+UUID path parameter. Delete one matching row transactionally and return HTTP 204 with an empty body. Unknown/already-deleted UUID returns HTTP 404 with detail `Meeting not found`; malformed UUID returns standard HTTP 422. Database unavailability returns generic HTTP 503 with detail `Database unavailable`, with rollback and bounded waits as for other storage operations. No automatic retries, no authentication or author protection. No schema migration is required. This is an explicitly authorized extension beyond the original list/create lab slice; any client can delete any meeting, so authenticated ownership must be reviewed before sensitive public use.
+
 ### GET /api/health
 
 Supporting readiness endpoint, not another product feature. Lightweight database query; HTTP 200 with status equal to ok if reachable, otherwise HTTP 503 with status equal to unavailable. Keep this inherited health response shape. Never expose connection information.
@@ -128,6 +132,10 @@ Form fields: title, local start/end datetime inputs and attendee count. Convert 
 
 Fetch on initial load. Distinguish loading, empty and error states. Disable duplicate submits. On HTTP 201 reset the form and fetch the sorted list again. If creation succeeds but refresh fails, say so instead of calling creation a failure. Preserve input on failed creation. No automatic POST retries and no fake data masking errors.
 
+Each meeting has an accessible Delete control. Ask for confirmation showing the title and stating deletion is permanent; cancel sends no request. Disable duplicate deletion while pending. Successful 204 removes the meeting from the local list and announces success without relying on a refresh. A 404 means another client already removed it: remove the stale item and announce that distinction. Other failures keep the meeting visible and show a retryable error; do not silently treat 503/network failure as deletion success or automatically retry. Preserve form input when another meeting is deleted. Prevent stale list requests or competing creation refreshes from resurrecting a deleted row. A visible note states that this workspace has no accounts and anyone with API access can delete meetings.
+
+Retro styling must retain form validation and loading/empty/error states, keyboard-visible focus, readable contrast, semantic headings/labels and responsive layout on narrow screens. Decorative window controls are not fake interactive actions. No fake stats, external fonts/assets or added dependencies are needed.
+
 ## 8. Review gate and local acceptance
 
 The minimal-slice specification was committed before code changes, and the human authorized continuation. Validate the dependency pins during implementation and review the generated diff and forward migration before executing against valuable data. Any contract or version change requires an explicit specification amendment.
@@ -140,7 +148,10 @@ Then generate only the approved slice and review the diff. Verify:
 - Reload and Compose restart preserve meetings.
 - Invalid titles, naive timestamps, duration/count violations and unknown fields return 422 without rows being added.
 - Database outages produce 503 and visible client errors, not successful empty results.
-- Only three Compose services exist; no extra product routes or authentication remain active.
+- Deletion persists after reload/restart; cancel does nothing, unknown UUID yields 404, malformed UUID yields 422 and database outages yield 503.
+- Frontend covers confirmed/cancelled deletion, pending duplicate protection, already-deleted handling, failure retention and preserved form input.
+- Retro redesign renders at desktop and mobile widths without losing focus visibility or overflowing content.
+- Only three Compose services exist; only the specified meeting routes and supporting health/docs routes remain active, without authentication.
 
 ## 9. Later lab stages — not local implementation scope yet
 

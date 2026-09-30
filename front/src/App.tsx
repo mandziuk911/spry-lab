@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { MeetingForm } from "@/components/MeetingForm"
 import { MeetingList } from "@/components/MeetingList"
 import { Button } from "@/components/ui/button"
-import { listMeetings } from "@/lib/api"
+import { deleteMeeting, listMeetings } from "@/lib/api"
 import type { Meeting } from "@/types"
 
 export default function App() {
@@ -10,93 +10,163 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [saved, setSaved] = useState(false)
+  const [notice, setNotice] = useState("")
+  const request = useRef(0)
+  const mutationGeneration = useRef(0)
+  // Session-local deletion tombstones guard even refreshes started during a DELETE.
+  // Never use them as ownership or persistence: a reload reads the API afresh.
+  const removed = useRef(new Set<Meeting["id"]>())
 
-  const load = useCallback(async (signal?: AbortSignal) => {
-    setLoading(true)
-    setError("")
+  const readList = useCallback(async (signal?: AbortSignal) => {
+    const generation = ++request.current
+    const mutationAtStart = mutationGeneration.current
+    const removedAtStart = new Set(removed.current)
     try {
       const result = await listMeetings(signal)
-      if (!signal?.aborted) setMeetings(result)
+      if (!signal?.aborted && generation === request.current) {
+        // If a deletion completed during this GET, reconcile against the newer
+        // mutation generation rather than its stale snapshot. Keep other new rows.
+        const excluded =
+          mutationAtStart === mutationGeneration.current ? removedAtStart : removed.current
+        setMeetings(result.filter((meeting) => !excluded.has(meeting.id)))
+      }
     } catch {
-      if (!signal?.aborted) setError("Could not load meetings. Please try again.")
+      if (!signal?.aborted && generation === request.current)
+        setError("Could not load meetings. Please try again.")
     } finally {
-      if (!signal?.aborted) setLoading(false)
+      if (!signal?.aborted && generation === request.current) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
     const controller = new AbortController()
-    void listMeetings(controller.signal)
-      .then((result) => {
-        if (!controller.signal.aborted) setMeetings(result)
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setError("Could not load meetings. Please try again.")
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
+    void readList(controller.signal)
     return () => controller.abort()
-  }, [])
+  }, [readList])
+
+  async function load() {
+    setLoading(true)
+    setError("")
+    await readList()
+  }
 
   async function onCreated() {
     setSaved(true)
     await load()
   }
 
+  async function onDelete(meeting: Meeting) {
+    const result = await deleteMeeting(meeting.id)
+    removed.current.add(meeting.id)
+    mutationGeneration.current += 1
+    setMeetings((current) => current.filter((item) => item.id !== meeting.id))
+    setNotice(
+      result === "deleted"
+        ? `“${meeting.title}” deleted permanently.`
+        : `“${meeting.title}” was already removed by another client.`,
+    )
+  }
+
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
   return (
-    <div className="min-h-screen">
-      <header className="border-b bg-card">
-        <div className="mx-auto max-w-6xl px-6 py-5">
-          <span className="text-2xl font-bold tracking-tight text-primary">
-            spry<span className="text-foreground">.</span>
+    <div className="desktop">
+      <div className="desk-window">
+        <header className="window-titlebar">
+          <span className="window-icon" aria-hidden="true">
+            S
           </span>
-        </div>
-      </header>
-      <main className="mx-auto max-w-6xl px-6 py-10 sm:py-14">
-        <div className="mb-9">
-          <p className="mb-2 text-xs font-semibold tracking-widest text-primary uppercase">
-            A little more together
-          </p>
-          <h1 className="text-4xl font-semibold tracking-tight">Meetings</h1>
-          <p className="mt-3 text-muted-foreground">
-            Plan a conversation. Keep everyone on the same page.
-          </p>
-          <p className="mt-2 text-sm text-muted-foreground">All times are local · {timezone}</p>
-        </div>
-        <div className="grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <section aria-labelledby="list-heading" className="min-w-0 space-y-4">
-            <h2 id="list-heading" className="text-xl font-semibold">
-              Your meetings
-            </h2>
-            {saved && (
-              <p role="status" className="text-sm text-primary">
-                {error
-                  ? "Meeting created, but the list could not be refreshed. Retry loading the list; do not resubmit the meeting."
-                  : "Meeting created successfully."}
+          <span>Spry Meeting Desk</span>
+          <span className="window-controls" aria-hidden="true">
+            <span>―</span>
+            <span>□</span>
+            <span>×</span>
+          </span>
+        </header>
+        <nav className="menu-strip" aria-label="Desk navigation">
+          <a href="#appointments">Appointments</a>
+          <a href="#new-meeting">New meeting</a>
+          <a href="#desk-notes">Desk notes</a>
+        </nav>
+        <main>
+          <div className="desk-banner">
+            <div>
+              <p className="eyebrow">A little more together</p>
+              <h1>Meetings</h1>
+              <p>Your next great conversation starts here.</p>
+            </div>
+            <div className="desk-stamp" aria-hidden="true">
+              LET’S
+              <br />
+              GET TOGETHER!
+            </div>
+          </div>
+          <div className="desk-layout">
+            <aside className="desk-sidebar" aria-label="Desk overview">
+              <h2>On your desk</h2>
+              <dl className="desk-stats">
+                <div>
+                  <dt>Meetings listed</dt>
+                  <dd>{meetings.length}</dd>
+                </div>
+                <div>
+                  <dt>Attendee places</dt>
+                  <dd>{meetings.reduce((sum, meeting) => sum + meeting.attendee_count, 0)}</dd>
+                </div>
+              </dl>
+              <p className="sidebar-tip">
+                Make a little time.
+                <br />
+                Make a big connection.
               </p>
-            )}
-            {loading ? (
-              <p role="status" className="py-10 text-muted-foreground">
-                Loading meetings…
+              <p className="access-note">
+                No accounts: anyone with API access can delete meetings.
               </p>
-            ) : error ? (
-              <div role="alert" className="rounded-xl border border-destructive/30 bg-card p-6">
-                <p className="mb-4 text-sm text-destructive">{error}</p>
-                <Button variant="outline" onClick={() => void load()}>
-                  Retry loading
-                </Button>
-              </div>
-            ) : (
-              <MeetingList meetings={meetings} />
-            )}
-          </section>
-          <section aria-label="Create a meeting">
-            <MeetingForm onCreated={onCreated} />
-          </section>
-        </div>
-      </main>
+            </aside>
+            <section
+              id="appointments"
+              aria-labelledby="list-heading"
+              className="appointment-module"
+            >
+              <h2 id="list-heading" tabIndex={-1} className="module-heading">
+                Your meetings <span>Appointment book</span>
+              </h2>
+              {saved && (
+                <p role="status" className="desk-message">
+                  {error
+                    ? "Meeting created, but the list could not be refreshed. Retry loading the list; do not resubmit the meeting."
+                    : "Meeting created successfully."}
+                </p>
+              )}
+              <p role="status" className={notice ? "desk-message" : ""}>
+                {notice}
+              </p>
+              {loading && (
+                <p role="status" className="desk-message">
+                  Loading meetings…
+                </p>
+              )}
+              {error && (
+                <div role="alert" className="desk-error">
+                  <p>{error}</p>
+                  <Button variant="outline" onClick={() => void load()}>
+                    Retry loading
+                  </Button>
+                </div>
+              )}
+              {(meetings.length > 0 || (!loading && !error)) && (
+                <MeetingList meetings={meetings} onDelete={onDelete} />
+              )}
+            </section>
+            <section id="new-meeting" aria-label="Create a meeting" className="form-module">
+              <MeetingForm onCreated={onCreated} />
+            </section>
+          </div>
+        </main>
+        <footer id="desk-notes" className="desk-footer">
+          <span>All times are local · {timezone}</span>
+          <span>Spry · Shared desk, no accounts</span>
+        </footer>
+      </div>
     </div>
   )
 }

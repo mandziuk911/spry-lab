@@ -1,3 +1,4 @@
+import uuid
 from time import monotonic
 
 import pytest
@@ -28,12 +29,13 @@ def test_connection_refused_returns_bounded_503(client):
         responses = [
             client.get("/api/meetings"),
             client.post("/api/meetings", json=meeting_payload()),
+            client.delete(f"/api/meetings/{uuid.uuid4()}"),
             client.get("/api/health"),
         ]
-        assert monotonic() - started < 12
-        assert [r.status_code for r in responses] == [503, 503, 503]
-        assert responses[0].json() == responses[1].json() == {"detail": "Database unavailable"}
-        assert responses[2].json() == {"status": "unavailable"}
+        assert monotonic() - started < 16
+        assert [r.status_code for r in responses] == [503, 503, 503, 503]
+        assert all(response.json() == {"detail": "Database unavailable"} for response in responses[:3])
+        assert responses[3].json() == {"status": "unavailable"}
     finally:
         unreachable.dispose()
 

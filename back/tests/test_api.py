@@ -3,7 +3,9 @@ import uuid
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import DB_CONNECT_ARGS, engine
 from app.main import app
 
@@ -62,8 +64,9 @@ def test_all_fields_required(client, fake_db, field):
 
 def test_active_routes_only():
     paths = app.openapi()["paths"]
-    assert set(paths) == {"/api/meetings", "/api/health"}
+    assert set(paths) == {"/api/meetings", "/api/meetings/{meeting_id}", "/api/health"}
     assert set(paths["/api/meetings"]) == {"get", "post"}
+    assert set(paths["/api/meetings/{meeting_id}"]) == {"delete"}
 
 
 def test_health(client):
@@ -72,7 +75,7 @@ def test_health(client):
     assert response.json() == {"status": "ok"}
 
 
-@pytest.mark.parametrize("operation", ["list", "create", "health"])
+@pytest.mark.parametrize("operation", ["list", "create", "delete", "delete_commit", "health"])
 def test_database_failure_is_generic_and_rolls_back(client, fake_db, operation, caplog):
     error = OperationalError("secret SQL", {"password": "secret"}, Exception("credentials"))
     if operation == "list":
@@ -82,6 +85,15 @@ def test_database_failure_is_generic_and_rolls_back(client, fake_db, operation, 
         fake_db.commit.side_effect = error
         response = client.post("/api/meetings", json=meeting_payload())
         fake_db.commit.assert_called_once()  # An uncertain commit must not be retried.
+    elif operation in {"delete", "delete_commit"}:
+        if operation == "delete":
+            fake_db.scalar.side_effect = error
+        else:
+            fake_db.commit.side_effect = error
+        response = client.delete(f"/api/meetings/{uuid.uuid4()}")
+        fake_db.scalar.assert_called_once()
+        if operation == "delete_commit":
+            fake_db.commit.assert_called_once()  # No retry of an uncertain deletion.
     else:
         fake_db.execute.side_effect = error
         response = client.get("/api/health")
@@ -94,11 +106,61 @@ def test_database_failure_is_generic_and_rolls_back(client, fake_db, operation, 
     assert "credentials" not in caplog.text
 
 
-def test_rollback_failure_keeps_503(client, fake_db):
+@pytest.mark.parametrize("operation", ["list", "delete"])
+def test_rollback_failure_keeps_503(client, fake_db, operation):
     error = OperationalError("secret", {}, Exception("secret"))
-    fake_db.scalars.side_effect = error
     fake_db.rollback.side_effect = error
-    assert client.get("/api/meetings").status_code == 503
+    if operation == "list":
+        fake_db.scalars.side_effect = error
+        response = client.get("/api/meetings")
+    else:
+        fake_db.scalar.side_effect = error
+        response = client.delete(f"/api/meetings/{uuid.uuid4()}")
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Database unavailable"}
+    fake_db.rollback.assert_called_once()
+
+
+def test_delete_cors_preflight_allows_only_configured_origin(client, fake_db):
+    origin = settings.cors_origin_list[0]
+    headers = {"Origin": origin, "Access-Control-Request-Method": "DELETE"}
+    response = client.options(f"/api/meetings/{uuid.uuid4()}", headers=headers)
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert "DELETE" in response.headers["access-control-allow-methods"]
+    denied = client.options(
+        f"/api/meetings/{uuid.uuid4()}",
+        headers={**headers, "Origin": "https://untrusted.example"},
+    )
+    assert denied.status_code == 400
+    assert "access-control-allow-origin" not in denied.headers
+    fake_db.scalar.assert_not_called()
+
+
+def test_delete_malformed_uuid_before_write(client, fake_db):
+    response = client.delete("/api/meetings/not-a-uuid")
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)
+    fake_db.scalar.assert_not_called()
+    fake_db.commit.assert_not_called()
+
+
+def test_postgres_delete_persists_and_retains_other_meeting(postgres_client, isolated_db):
+    deleted = postgres_client.post("/api/meetings", json=meeting_payload()).json()
+    retained = postgres_client.post("/api/meetings", json=meeting_payload(title="Keep me")).json()
+    response = postgres_client.delete(f"/api/meetings/{deleted['id']}")
+    assert response.status_code == 204
+    assert response.content == b""
+    assert postgres_client.get("/api/meetings").json() == [retained]
+    with Session(isolated_db) as session:
+        assert list(session.scalars(text("SELECT id FROM meetings"))) == [uuid.UUID(retained["id"])]
+    isolated_db.dispose()
+    assert postgres_client.get("/api/meetings").json() == [retained]
+    for meeting_id in (deleted["id"], str(uuid.uuid4())):
+        response = postgres_client.delete(f"/api/meetings/{meeting_id}")
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Meeting not found"}
+    assert postgres_client.get("/api/meetings").json() == [retained]
 
 
 def test_connection_and_query_timeouts_are_bounded():
@@ -141,15 +203,19 @@ def test_postgres_create_list_persistence_order(postgres_client, isolated_db):
     assert len(client.get("/api/meetings").json()) == 3
 
 
-def test_postgres_unavailable_then_recovers(client, fake_db, isolated_db):
+@pytest.mark.parametrize("operation", ["list", "delete"])
+def test_postgres_unavailable_then_recovers(client, fake_db, isolated_db, operation):
     # Missing table is a real PostgreSQL storage failure; rollback permits a new request.
-    from sqlalchemy.orm import Session
 
     from app.db import get_db
 
     with Session(isolated_db) as session:
         app.dependency_overrides[get_db] = lambda: session
-        response = client.get("/api/meetings")
+        response = (
+            client.get("/api/meetings")
+            if operation == "list"
+            else client.delete(f"/api/meetings/{uuid.uuid4()}")
+        )
         assert response.status_code == 503
         assert response.json() == {"detail": "Database unavailable"}
         assert client.get("/api/health").json() == {"status": "ok"}

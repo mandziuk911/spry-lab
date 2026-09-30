@@ -21,6 +21,148 @@ function fill(title = "  Team sync  ", end = "2026-08-10T10:00", count = "4") {
 }
 
 describe("meeting page", () => {
+  it("cancels a named permanent deletion without a request", async () => {
+    const fetch = vi.fn().mockResolvedValue(json([meeting]))
+    vi.stubGlobal("fetch", fetch)
+    render(<App />)
+    await screen.findByRole("heading", { name: meeting.title })
+    await userEvent.click(screen.getByRole("button", { name: "Delete Team sync" }))
+    expect(screen.getByRole("group", { name: "Confirm deletion of Team sync" })).toHaveTextContent(
+      "permanent",
+    )
+    expect(screen.getByRole("button", { name: "Cancel deletion" })).toHaveFocus()
+    await userEvent.click(screen.getByRole("button", { name: "Cancel deletion" }))
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete Team sync" })).toHaveFocus(),
+    )
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole("heading", { name: meeting.title })).toBeInTheDocument()
+  })
+
+  it.each([204, 404])(
+    "removes a meeting on %s without parsing a body or refreshing, preserving the form",
+    async (status) => {
+      const response = new Response(null, { status })
+      const parse = vi.spyOn(response, "json")
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(json([meeting]))
+        .mockResolvedValueOnce(response)
+      vi.stubGlobal("fetch", fetch)
+      render(<App />)
+      await screen.findByRole("heading", { name: meeting.title })
+      fill("Unfinished draft")
+      await userEvent.click(screen.getByRole("button", { name: "Delete Team sync" }))
+      await userEvent.click(screen.getByRole("button", { name: "Permanently delete meeting" }))
+      expect(
+        await screen.findByText(
+          status === 204 ? /deleted permanently/ : /already removed by another client/,
+        ),
+      ).toBeInTheDocument()
+      expect(screen.queryByRole("heading", { name: meeting.title })).not.toBeInTheDocument()
+      expect(screen.getByLabelText("Title")).toHaveValue("Unfinished draft")
+      expect(screen.getByLabelText("Start")).toHaveValue("2026-08-10T09:00")
+      expect(screen.getByLabelText("End")).toHaveValue("2026-08-10T10:00")
+      expect(screen.getByLabelText("Attendee count")).toHaveValue(4)
+      expect(fetch).toHaveBeenCalledTimes(2)
+      expect(fetch.mock.calls[1]).toEqual([
+        expect.stringContaining(`/api/meetings/${meeting.id}`),
+        { method: "DELETE" },
+      ])
+      expect(parse).not.toHaveBeenCalled()
+      expect(screen.getByRole("heading", { name: /Your meetings/ })).toHaveFocus()
+    },
+  )
+
+  it.each(["503", "network"])(
+    "retains the meeting and input after %s deletion failure with no automatic retry",
+    async (failure) => {
+      const fetch = vi.fn().mockResolvedValueOnce(json([meeting]))
+      if (failure === "503") fetch.mockResolvedValueOnce(json({}, 503))
+      else fetch.mockRejectedValueOnce(new TypeError("offline"))
+      vi.stubGlobal("fetch", fetch)
+      render(<App />)
+      await screen.findByRole("heading", { name: meeting.title })
+      fill("Keep this draft")
+      await userEvent.click(screen.getByRole("button", { name: "Delete Team sync" }))
+      await userEvent.click(screen.getByRole("button", { name: "Permanently delete meeting" }))
+      expect(await screen.findByRole("alert")).toHaveTextContent("Could not delete")
+      expect(screen.getByRole("heading", { name: meeting.title })).toBeInTheDocument()
+      expect(screen.getByLabelText("Title")).toHaveValue("Keep this draft")
+      expect(screen.getByRole("button", { name: "Permanently delete meeting" })).toBeEnabled()
+      expect(fetch).toHaveBeenCalledTimes(2)
+    },
+  )
+
+  it("locks repeated confirmations while deletion is pending", async () => {
+    let resolve!: (response: Response) => void
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(json([meeting]))
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((r) => {
+            resolve = r
+          }),
+      )
+    vi.stubGlobal("fetch", fetch)
+    render(<App />)
+    await screen.findByRole("heading", { name: meeting.title })
+    await userEvent.click(screen.getByRole("button", { name: "Delete Team sync" }))
+    const confirm = screen.getByRole("button", { name: "Permanently delete meeting" })
+    await userEvent.dblClick(confirm)
+    fireEvent.click(confirm)
+    expect(confirm).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Cancel deletion" })).toBeDisabled()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    resolve(new Response(null, { status: 204 }))
+    expect(await screen.findByText(/deleted permanently/)).toBeInTheDocument()
+  })
+
+  it.each(["refresh-first", "delete-first"])(
+    "does not resurrect a deleted meeting from a stale creation refresh (%s)",
+    async (order) => {
+      let resolveRefresh!: (response: Response) => void
+      let resolveDelete!: (response: Response) => void
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce(json([meeting]))
+        .mockResolvedValueOnce(json(meeting, 201))
+        .mockImplementationOnce(
+          () =>
+            new Promise<Response>((r) => {
+              resolveRefresh = r
+            }),
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise<Response>((r) => {
+              resolveDelete = r
+            }),
+        )
+      vi.stubGlobal("fetch", fetch)
+      render(<App />)
+      await screen.findByRole("heading", { name: meeting.title })
+      fill("New appointment")
+      await userEvent.click(screen.getByRole("button", { name: "Create meeting" }))
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3))
+      await userEvent.click(screen.getByRole("button", { name: "Delete Team sync" }))
+      await userEvent.click(screen.getByRole("button", { name: "Permanently delete meeting" }))
+      if (order === "refresh-first") {
+        resolveRefresh(json([meeting]))
+        await waitFor(() => expect(screen.queryByText("Loading meetings…")).not.toBeInTheDocument())
+        resolveDelete(new Response(null, { status: 204 }))
+      } else {
+        resolveDelete(new Response(null, { status: 204 }))
+        await screen.findByText(/deleted permanently/)
+        resolveRefresh(json([meeting]))
+      }
+      expect(await screen.findByText("No meetings yet")).toBeInTheDocument()
+      expect(screen.queryByRole("heading", { name: meeting.title })).not.toBeInTheDocument()
+      expect(fetch).toHaveBeenCalledTimes(4)
+    },
+  )
+
   it("distinguishes loading and empty states", async () => {
     let resolve!: (value: Response) => void
     vi.stubGlobal(
@@ -46,7 +188,7 @@ describe("meeting page", () => {
     vi.stubGlobal("fetch", fetch)
     render(<App />)
     expect(await screen.findByRole("heading", { name: "Team sync" })).toBeInTheDocument()
-    expect(screen.getByText("4")).toBeInTheDocument()
+    expect(screen.getAllByText("4")).toHaveLength(2)
     expect(document.querySelectorAll("time")).toHaveLength(2)
     expect(document.querySelector("time")).toHaveAttribute("datetime", meeting.starts_at)
     expect(fetch).toHaveBeenCalledWith(
