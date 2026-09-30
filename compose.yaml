@@ -1,57 +1,45 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16.8-bookworm
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-spry}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spry}
+      POSTGRES_DB: ${POSTGRES_DB:-spry}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports: ["${DB_PORT:-5432}:5432"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
-      retries: 10
+      timeout: 5s
+      start_period: 10s
+      retries: 12
 
   backend:
     build: ./back
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      CORS_ORIGINS: ${CORS_ORIGINS}
-      SEED: ${SEED:-false}
-      # Empty (no `make aws-cognito-deploy` yet) = auth disabled, everyone is one local user.
-      COGNITO_REGION: ${COGNITO_REGION:-us-east-1}
-      COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID:-}
-      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
-    command: sh -c "alembic upgrade head && python -m app.seed && uvicorn app.main:app --host 0.0.0.0 --port 8000"
-    ports: ["${BACKEND_PORT:-8000}:8000"]
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-spry}:${POSTGRES_PASSWORD:-spry}@db:5432/${POSTGRES_DB:-spry}
+      CORS_ORIGINS: http://localhost:5173
+    ports:
+      - "8000:8000"
     depends_on:
-      db: { condition: service_healthy }
+      db:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
-      interval: 10s
-      retries: 5
-    # `docker compose watch` (used by `make up`) rebuilds the image when a file changes;
-    # files in .dockerignore are skipped.
-    develop:
-      watch:
-        - { action: rebuild, path: ./back }
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=4)"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 12
 
   frontend:
-    build:
-      context: ./front
-      args:
-        VITE_COGNITO_REGION: ${COGNITO_REGION:-us-east-1}
-        VITE_COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID:-}
-        VITE_COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
-        VITE_COGNITO_DOMAIN: ${COGNITO_DOMAIN:-}
-        VITE_COGNITO_GOOGLE: ${COGNITO_GOOGLE_ENABLED:-false}
-    ports: ["${FRONTEND_PORT:-3000}:80"]
+    build: ./front
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
     depends_on:
-      backend: { condition: service_healthy }
-    develop:
-      watch:
-        - { action: rebuild, path: ./front, ignore: [src/test/] }
+      backend:
+        condition: service_healthy
 
 volumes:
   pgdata:

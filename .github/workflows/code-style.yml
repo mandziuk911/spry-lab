@@ -1,12 +1,11 @@
-name: Code style
+name: Quality checks
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 concurrency:
-  group: code-style-${{ github.ref }}
+  group: checks-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -14,62 +13,63 @@ permissions:
 
 jobs:
   backend:
-    name: Backend (ruff)
+    name: Backend lint and tests
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: back
+    services:
+      postgres:
+        image: postgres:16.8-bookworm
+        env:
+          POSTGRES_USER: spry
+          POSTGRES_PASSWORD: spry
+          POSTGRES_DB: spry_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U spry -d spry_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql+psycopg://spry:spry@localhost:5432/spry_test
     steps:
       - uses: actions/checkout@v4
-
       - uses: astral-sh/setup-uv@v6
         with:
+          version: "0.6.17"
           enable-cache: true
-          cache-dependency-glob: back/pyproject.toml
-
-      - name: Install dev dependencies
-        run: uv sync --python 3.12
-
+          cache-dependency-glob: back/uv.lock
+      - name: Install locked dependencies
+        run: uv sync --frozen --python 3.12.10
       - name: Lint
-        run: uv run ruff check --output-format=github .
-
+        run: uv run --frozen ruff check --output-format=github .
       - name: Check formatting
-        run: uv run ruff format --check --diff .
+        run: uv run --frozen ruff format --check .
+      - name: Tests
+        run: uv run --frozen pytest
 
   frontend:
-    name: Frontend (eslint, prettier, tsc)
+    name: Frontend lint, tests and build
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: front
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: "24.0.0"
           cache: npm
           cache-dependency-path: front/package-lock.json
-
-      - name: Install dependencies
+      - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
-
       - name: Lint
         run: npm run lint
-
       - name: Check formatting
         run: npm run format:check
-
-      - name: Type check
-        run: npm run typecheck
-
-  infra:
-    name: Infra (cfn-lint)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: astral-sh/setup-uv@v6
-
-      - name: Lint CloudFormation templates
-        run: uvx cfn-lint --format parseable infra/*.yaml
+      - name: Tests
+        run: npm test
+      - name: Production build
+        run: npm run build

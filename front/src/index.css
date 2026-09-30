@@ -1,63 +1,27 @@
 @import "tailwindcss";
-@import "tw-animate-css";
 
-@custom-variant dark (&:is(.dark *));
-
-/* Palette taken from learn.ucu.edu.ua: burgundy brand, light grey page, dark footer. */
 :root {
-  --radius: 0.25rem;
-  --background: #f7f7f7;
-  --foreground: #343a40;
+  --radius: 0.75rem;
+  --background: #f5f6f3;
+  --foreground: #25352d;
   --card: #ffffff;
-  --card-foreground: #343a40;
-  --popover: #ffffff;
-  --popover-foreground: #343a40;
-  --primary: #7f1716;
+  --card-foreground: #25352d;
+  --primary: #286147;
   --primary-foreground: #ffffff;
-  --secondary: #f3e8e8;
-  --secondary-foreground: #7f1716;
-  --muted: #f1f1f1;
-  --muted-foreground: #4c5a73;
-  --accent: #f7eeee;
-  --accent-foreground: #7f1716;
+  --secondary: #eaf0eb;
+  --secondary-foreground: #286147;
+  --muted: #edf0eb;
+  --muted-foreground: #617167;
+  --accent: #eaf0eb;
+  --accent-foreground: #286147;
   --destructive: #b42318;
-  --border: #e2e2e2;
-  --input: #d6d6d6;
-  --ring: #7f1716;
-
-  --brand: #7f1716;
-  --brand-dark: #661211;
-  --footer: #424141;
-  --footer-bottom: #222222;
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --border: #dfe5dc;
+  --input: #cbd5c9;
+  --ring: #286147;
 }
 
 @theme inline {
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --color-brand: var(--brand);
-  --color-brand-dark: var(--brand-dark);
-  --color-footer: var(--footer);
-  --color-footer-bottom: var(--footer-bottom);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -66,8 +30,6 @@
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -87,6 +49,6 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply m-0 bg-background font-sans text-foreground antialiased;
   }
 }

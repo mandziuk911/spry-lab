@@ -1,6 +1,6 @@
 # Spry — reviewed structure before implementation
 
-**Status: draft awaiting human approval.** This document specifies the minimal lab slice; it does not describe the inherited application as already compliant. Do not generate or change application code until this draft is approved.
+**Status: minimal-slice implementation authorized by the human after selecting “Follow the lab scope” and requesting continuation.** This document specifies the target, not a claim that the inherited application already complies. Validate the implementation against the acceptance gate below.
 
 ## 1. Repository decision
 
@@ -130,7 +130,7 @@ Fetch on initial load. Distinguish loading, empty and error states. Disable dupl
 
 ## 8. Review gate and local acceptance
 
-Before generating changes, review this document line by line, validate the listed dependency pins, and approve the inherited-code adaptation and migration plan. Commit the approved specification before code generation.
+The minimal-slice specification was committed before code changes, and the human authorized continuation. Validate the dependency pins during implementation and review the generated diff and forward migration before executing against valuable data. Any contract or version change requires an explicit specification amendment.
 
 Then generate only the approved slice and review the diff. Verify:
 

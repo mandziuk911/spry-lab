@@ -1,84 +1,31 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import (
     AwareDatetime,
     BaseModel,
     ConfigDict,
-    EmailStr,
     Field,
-    HttpUrl,
+    field_serializer,
     field_validator,
     model_validator,
 )
 
 
-def _blank_to_none(value: object) -> object:
-    if isinstance(value, str) and not value.strip():
-        return None
-    return value
-
-
-class ParticipantCreate(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    name: str = Field(min_length=1, max_length=120)
-    email: EmailStr
-
-    @field_validator("email")
-    @classmethod
-    def lowercase_email(cls, value: str) -> str:
-        return value.lower()
-
-
-class ParticipantRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    name: str
-    email: str
-
-
-class UserRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: UUID
-    email: str
-    name: str | None
-
-
-class UserUpdate(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    name: str | None = Field(default=None, max_length=120)
-
-    @field_validator("name", mode="before")
-    @classmethod
-    def blank_to_none(cls, value: object) -> object:
-        return _blank_to_none(value)
-
-
 class MeetingCreate(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     title: str = Field(min_length=1, max_length=200)
-    description: str | None = Field(default=None, max_length=5000)
-    call_link: HttpUrl | None = None
-    place: str | None = Field(default=None, max_length=255)
     starts_at: AwareDatetime
     ends_at: AwareDatetime
-    participant_ids: list[UUID] = []
+    attendee_count: int = Field(strict=True, ge=0)
 
-    @field_validator("description", "call_link", "place", mode="before")
+    @field_validator("starts_at", "ends_at", mode="before")
     @classmethod
-    def blank_to_none(cls, value: object) -> object:
-        return _blank_to_none(value)
-
-    @model_validator(mode="after")
-    def require_call_link_or_place(self) -> "MeetingCreate":
-        if self.call_link is None and self.place is None:
-            raise ValueError("Provide a call link, a place, or both")
-        return self
+    def require_iso_string(cls, value: object) -> object:
+        if not isinstance(value, str):
+            raise ValueError("Use a timezone-aware ISO 8601 string")
+        return value
 
     @model_validator(mode="after")
     def ends_after_start(self) -> "MeetingCreate":
@@ -92,11 +39,10 @@ class MeetingRead(BaseModel):
 
     id: UUID
     title: str
-    description: str | None
-    call_link: str | None
-    place: str | None
-    starts_at: datetime
-    ends_at: datetime
-    owner_id: UUID | None
-    participants: list[ParticipantRead]
-    created_at: datetime
+    starts_at: AwareDatetime
+    ends_at: AwareDatetime
+    attendee_count: int
+
+    @field_serializer("starts_at", "ends_at")
+    def utc_timestamp(self, value: datetime) -> str:
+        return value.astimezone(UTC).isoformat().replace("+00:00", "Z")

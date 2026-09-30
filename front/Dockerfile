@@ -1,16 +1,7 @@
-FROM node:24-alpine AS build
+FROM node:24.0.0-bookworm-slim
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm ci
 COPY . .
-# Cognito settings baked into the bundle (compose passes them from .env; empty = auth disabled).
-ARG VITE_COGNITO_REGION VITE_COGNITO_USER_POOL_ID VITE_COGNITO_CLIENT_ID VITE_COGNITO_DOMAIN VITE_COGNITO_GOOGLE
-ENV VITE_COGNITO_REGION=$VITE_COGNITO_REGION VITE_COGNITO_USER_POOL_ID=$VITE_COGNITO_USER_POOL_ID \
-    VITE_COGNITO_CLIENT_ID=$VITE_COGNITO_CLIENT_ID VITE_COGNITO_DOMAIN=$VITE_COGNITO_DOMAIN \
-    VITE_COGNITO_GOOGLE=$VITE_COGNITO_GOOGLE
-RUN npm run build
-
-FROM nginx:1.27-alpine
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
+EXPOSE 5173
+CMD ["npm", "run", "dev"]

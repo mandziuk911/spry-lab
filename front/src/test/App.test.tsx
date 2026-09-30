@@ -1,176 +1,167 @@
-import { screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { beforeEach, describe, expect, it } from "vitest"
-
+import { describe, expect, it, vi } from "vitest"
 import App from "@/App"
-import { formatLongDay, layoutDay } from "@/lib/calendar"
-import { parseNewParticipant } from "@/lib/participants"
-import { mockFetch, renderWithQuery, sampleMeeting, signInForTest, todayAt } from "@/test/utils"
+import { MeetingForm } from "@/components/MeetingForm"
 
-describe("Home page", () => {
-  beforeEach(() => signInForTest())
+const meeting = {
+  id: "7b96c369-22af-4c3e-88d5-e2d447552c7f",
+  title: "Team sync",
+  starts_at: "2026-08-10T09:00:00Z",
+  ends_at: "2026-08-10T10:00:00Z",
+  attendee_count: 4,
+}
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })
+function fill(title = "  Team sync  ", end = "2026-08-10T10:00", count = "4") {
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: title } })
+  fireEvent.change(screen.getByLabelText("Start"), { target: { value: "2026-08-10T09:00" } })
+  fireEvent.change(screen.getByLabelText("End"), { target: { value: end } })
+  fireEvent.change(screen.getByLabelText("Attendee count"), { target: { value: count } })
+}
 
-  it("sends signed-out users to sign in", async () => {
-    localStorage.clear()
-    mockFetch(() => ({ body: [] }))
-    renderWithQuery(<App />, "/home")
-    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument()
+describe("meeting page", () => {
+  it("distinguishes loading and empty states", async () => {
+    let resolve!: (value: Response) => void
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((r) => {
+            resolve = r
+          }),
+      ),
+    )
+    render(<App />)
+    expect(screen.getByText("Loading meetings…")).toBeInTheDocument()
+    expect(screen.queryByText("No meetings yet")).not.toBeInTheDocument()
+    resolve(json([]))
+    expect(await screen.findByText("No meetings yet")).toBeInTheDocument()
+    expect(screen.getByText(/All times are local/)).toBeInTheDocument()
   })
 
-  it("shows the signed-in user and signs out", async () => {
-    mockFetch(() => ({ body: [] }))
-    renderWithQuery(<App />, "/home")
-    expect(await screen.findByText("Anna Kovalenko")).toBeInTheDocument()
-    await userEvent.click(screen.getByRole("button", { name: "Sign out" }))
-    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument()
-    expect(localStorage.getItem("meetings.session")).toBeNull()
-  })
-
-  it("shows meetings in the week calendar with details on click", async () => {
-    mockFetch(() => ({ body: [sampleMeeting] }))
-    renderWithQuery(<App />, "/home")
-
-    const today = await screen.findByRole("region", { name: formatLongDay(new Date()) })
-    const block = within(today).getByRole("button", { name: /Sprint planning/ })
-    expect(block).toHaveTextContent("10:00 – 11:00")
-    expect(screen.getAllByRole("region")).toHaveLength(7)
-
-    await userEvent.click(block)
-    const details = await screen.findByRole("dialog")
-    expect(within(details).getByText("Anna")).toHaveAttribute("data-slot", "badge")
-    expect(within(details).getByRole("link", { name: /join call/i })).toHaveAttribute(
-      "href",
-      sampleMeeting.call_link,
+  it("renders the exact contract and calls the configured API", async () => {
+    vi.stubEnv("VITE_API_URL", "http://localhost:9000/")
+    const fetch = vi.fn().mockResolvedValue(json([meeting]))
+    vi.stubGlobal("fetch", fetch)
+    render(<App />)
+    expect(await screen.findByRole("heading", { name: "Team sync" })).toBeInTheDocument()
+    expect(screen.getByText("4")).toBeInTheDocument()
+    expect(document.querySelectorAll("time")).toHaveLength(2)
+    expect(document.querySelector("time")).toHaveAttribute("datetime", meeting.starts_at)
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:9000/api/meetings",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
   })
 
-  it("switches between week and day views", async () => {
-    mockFetch(() => ({ body: [sampleMeeting] }))
-    renderWithQuery(<App />, "/home")
-
-    await screen.findByRole("region", { name: formatLongDay(new Date()) })
-    await userEvent.click(screen.getByRole("button", { name: "Day" }))
-    expect(screen.getByRole("button", { name: "Day" })).toHaveAttribute("aria-pressed", "true")
-    expect(screen.getAllByRole("region")).toHaveLength(1)
-    expect(screen.getByRole("button", { name: /Sprint planning/ })).toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole("button", { name: "Next day" }))
-    expect(screen.queryByRole("button", { name: /Sprint planning/ })).not.toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole("button", { name: "Today" }))
-    expect(screen.getByRole("button", { name: /Sprint planning/ })).toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole("button", { name: "Week" }))
-    expect(screen.getAllByRole("region")).toHaveLength(7)
+  it("shows GET errors rather than an empty list and supports retry", async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(json({}, 503)).mockResolvedValueOnce(json([]))
+    vi.stubGlobal("fetch", fetch)
+    render(<App />)
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load")
+    expect(screen.queryByText("No meetings yet")).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Retry loading" }))
+    expect(await screen.findByText("No meetings yet")).toBeInTheDocument()
   })
 
-  it("opens the form at the clicked time slot", async () => {
-    mockFetch(() => ({ body: [] }))
-    renderWithQuery(<App />, "/home")
-
-    const label = `New meeting on ${formatLongDay(new Date())} at 14:00`
-    await userEvent.click(await screen.findByRole("button", { name: label }))
-
-    const dialog = await screen.findByRole("dialog")
-    expect(within(dialog).getByLabelText("Start")).toHaveValue("14:00")
-    expect(within(dialog).getByLabelText("End")).toHaveValue("15:00")
-  })
-
-  it("edits a meeting from its details", async () => {
-    const fetchMock = mockFetch((_url, init) =>
-      init?.method === "PUT"
-        ? { body: { ...sampleMeeting, title: "Sprint review" } }
-        : { body: [sampleMeeting] },
-    )
-    renderWithQuery(<App />, "/home")
-
-    await userEvent.click(await screen.findByRole("button", { name: /Sprint planning/ }))
-    await userEvent.click(await screen.findByRole("button", { name: "Edit Sprint planning" }))
-
-    const dialog = await screen.findByRole("dialog", { name: "Edit meeting" })
-    const title = within(dialog).getByLabelText("Title")
-    expect(title).toHaveValue("Sprint planning")
-    expect(within(dialog).getByLabelText("Start")).toHaveValue("10:00")
-    expect(within(dialog).getByLabelText("Place")).toHaveValue("Room 204")
-
-    await userEvent.clear(title)
-    await userEvent.type(title, "Sprint review")
-    await userEvent.click(within(dialog).getByRole("button", { name: "Save changes" }))
-
-    const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")
-    expect(put?.[0]).toBe(`/api/meetings/${sampleMeeting.id}`)
-    expect(JSON.parse(String(put?.[1]?.body))).toEqual({
-      title: "Sprint review",
-      description: sampleMeeting.description,
-      call_link: sampleMeeting.call_link,
-      place: sampleMeeting.place,
-      starts_at: sampleMeeting.starts_at,
-      ends_at: sampleMeeting.ends_at,
-      participant_ids: sampleMeeting.participants.map((p) => p.id),
+  it("trims, converts local dates to UTC, sends only four fields and refreshes after 201", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(json([]))
+      .mockResolvedValueOnce(json(meeting, 201))
+      .mockResolvedValueOnce(json([meeting]))
+    vi.stubGlobal("fetch", fetch)
+    render(<App />)
+    await screen.findByText("No meetings yet")
+    fill()
+    await userEvent.click(screen.getByRole("button", { name: "Create meeting" }))
+    expect(await screen.findByRole("heading", { name: "Team sync" })).toBeInTheDocument()
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+      title: "Team sync",
+      starts_at: new Date("2026-08-10T09:00").toISOString(),
+      ends_at: new Date("2026-08-10T10:00").toISOString(),
+      attendee_count: 4,
     })
-    await waitFor(() => expect(dialog).not.toBeInTheDocument())
+    expect(fetch.mock.calls[1][1].method).toBe("POST")
+    expect(screen.getByLabelText("Title")).toHaveValue("")
+    expect(screen.getByLabelText("Attendee count")).toHaveValue(0)
+    expect(fetch).toHaveBeenCalledTimes(3)
   })
 
-  it("asks for confirmation before deleting", async () => {
-    const fetchMock = mockFetch((_url, init) =>
-      init?.method === "DELETE" ? { status: 204 } : { body: [sampleMeeting] },
+  it.each([422, 503])(
+    "preserves input after POST %s and does not retry or refresh",
+    async (status) => {
+      const fetch = vi.fn().mockResolvedValue(json({}, status))
+      vi.stubGlobal("fetch", fetch)
+      render(<MeetingForm onCreated={vi.fn()} />)
+      fill()
+      await userEvent.click(screen.getByRole("button", { name: "Create meeting" }))
+      expect(await screen.findByRole("alert")).toHaveTextContent("details have been kept")
+      expect(screen.getByLabelText("Title")).toHaveValue("  Team sync  ")
+      expect(screen.getByLabelText("Start")).toHaveValue("2026-08-10T09:00")
+      expect(screen.getByLabelText("End")).toHaveValue("2026-08-10T10:00")
+      expect(screen.getByLabelText("Attendee count")).toHaveValue(4)
+      expect(fetch).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it("distinguishes successful creation from failed list refresh", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(json([]))
+      .mockResolvedValueOnce(json(meeting, 201))
+      .mockRejectedValueOnce(new TypeError("offline"))
+    vi.stubGlobal("fetch", fetch)
+    render(<App />)
+    await screen.findByText("No meetings yet")
+    fill()
+    await userEvent.click(screen.getByRole("button", { name: "Create meeting" }))
+    expect(await screen.findByText(/Meeting created, but/)).toBeInTheDocument()
+    expect(screen.getByLabelText("Title")).toHaveValue("")
+    expect(screen.queryByText(/Could not create/)).not.toBeInTheDocument()
+  })
+
+  it("disables duplicate submissions while POST is pending", async () => {
+    let resolve!: (value: Response) => void
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((r) => {
+          resolve = r
+        }),
     )
-    renderWithQuery(<App />, "/home")
-
-    await userEvent.click(await screen.findByRole("button", { name: /Sprint planning/ }))
-    await userEvent.click(await screen.findByRole("button", { name: "Delete Sprint planning" }))
-
-    const dialog = await screen.findByRole("alertdialog")
-    expect(dialog).toHaveTextContent("Delete Sprint planning?")
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ method: "DELETE" }),
-    )
-
-    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }))
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/api/meetings/${sampleMeeting.id}`,
-      expect.objectContaining({ method: "DELETE" }),
-    )
-  })
-})
-
-describe("layoutDay", () => {
-  const meeting = (id: string, from: number, to: number) => ({
-    ...sampleMeeting,
-    id,
-    starts_at: todayAt(from).toISOString(),
-    ends_at: todayAt(to).toISOString(),
+    vi.stubGlobal("fetch", fetch)
+    const onCreated = vi.fn().mockResolvedValue(undefined)
+    render(<MeetingForm onCreated={onCreated} />)
+    fill()
+    const button = screen.getByRole("button", { name: "Create meeting" })
+    await userEvent.dblClick(button)
+    expect(button).toBeDisabled()
+    expect(screen.getByLabelText("Title")).toBeDisabled()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    resolve(json(meeting, 201))
+    await waitFor(() => expect(button).not.toBeDisabled())
+    expect(onCreated).toHaveBeenCalledTimes(1)
   })
 
-  it("places overlapping meetings side by side", () => {
-    const segments = layoutDay(
-      [meeting("a", 9, 11), meeting("b", 10, 12), meeting("c", 13, 14)],
-      new Date(),
-    )
-    expect(segments.map(({ meeting, column, columns }) => [meeting.id, column, columns])).toEqual([
-      ["a", 0, 2],
-      ["b", 1, 2],
-      ["c", 0, 1],
-    ])
-  })
-
-  it("clips a meeting that runs past midnight", () => {
-    const late = { ...meeting("late", 23, 23), ends_at: todayAt(26).toISOString() }
-    expect(layoutDay([late], new Date())[0]).toMatchObject({ startMin: 23 * 60, endMin: 24 * 60 })
-  })
-})
-
-describe("parseNewParticipant", () => {
-  it("splits name and email", () => {
-    expect(parseNewParticipant("Anna Kovalenko Anna@Example.com")).toEqual({
-      name: "Anna Kovalenko",
-      email: "anna@example.com",
-    })
-  })
-
-  it("needs both a name and an email", () => {
-    expect(parseNewParticipant("anna@example.com")).toBeNull()
-    expect(parseNewParticipant("Anna")).toBeNull()
-  })
+  it.each([
+    ["   ", "2026-08-10T10:00", "0", "Enter a title"],
+    ["x".repeat(201), "2026-08-10T10:00", "0", "Enter a title"],
+    ["Sync", "2026-08-10T09:00", "0", "end after the start"],
+    ["Sync", "", "0", "valid dates"],
+    ["Sync", "2026-08-10T10:00", "-1", "whole number"],
+    ["Sync", "2026-08-10T10:00", "1.5", "whole number"],
+    ["Sync", "2026-08-10T10:00", "", "whole number"],
+  ])(
+    "validates invalid form values before POST (%s, %s, %s)",
+    async (title, end, count, message) => {
+      const fetch = vi.fn()
+      vi.stubGlobal("fetch", fetch)
+      render(<MeetingForm onCreated={vi.fn()} />)
+      fill(title, end, count)
+      await userEvent.click(screen.getByRole("button", { name: "Create meeting" }))
+      expect(screen.getByRole("alert")).toHaveTextContent(message)
+      expect(fetch).not.toHaveBeenCalled()
+    },
+  )
 })
