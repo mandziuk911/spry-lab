@@ -1,156 +1,153 @@
-# Spry — repository specification
+# Spry — reviewed structure before implementation
 
-Status: draft for human review. This commit contains the specification only. Do not generate application code until this document is approved.
+**Status: draft awaiting human approval.** This document specifies the minimal lab slice; it does not describe the inherited application as already compliant. Do not generate or change application code until this draft is approved.
 
-## Repository decision
+## 1. Repository decision
 
-Spry is a monorepo: backend, frontend, database configuration and, in a later stage, CI and deployment configuration share one repository. API and client changes can be reviewed and committed atomically. An agent can read the endpoint, schema, migration and UI together instead of guessing contracts across repositories. For a small team building the first slice, shared context is worth more than independent repositories and release cycles.
+Use one monorepo for the API, frontend, database migrations, local orchestration and CI/deployment configuration. Atomic commits keep API and client contracts together. More importantly, the repository is the agent's context window: it can inspect the endpoint, model, migration and consuming component together. Separate repositories buy release independence but cost shared context. For this small team and first product slice, context is worth more.
 
-The course source is https://github.com/dobosevych/OneTwoThree. This personal private copy preserves its Git history. Keep that repository as the upstream remote; push personal work only to the personal origin. Grant the lecturer access to this repository before submission.
+Source: https://github.com/dobosevych/OneTwoThree. Personal private copy: https://github.com/mandziuk911/spry. Preserve source Git history, keep the source as `upstream`, and push personal work only to `origin`. Give the lecturer access before submission.
 
-The course source already includes back/, front/, compose.yaml, infra/ and a Makefile. The proposed layout below differs from that source and is not an instruction to overwrite or duplicate those files. Before generation, review the inherited implementation and amend this draft with an explicit retain/rename/replace decision. Existing course code is inherited, not generated from this specification; it has not yet been verified against the contracts below.
+## 2. Approved direction and inherited-code boundary
 
-## Scope and exclusions
+The human selected the minimal lab scope rather than retaining the full course application. Keep the existing names `back/`, `front/` and `compose.yaml`: they are equivalent to the example's backend/frontend/docker-compose names. Do not create parallel applications or a second Compose file.
 
-The first slice lists and creates meetings through a single frontend page backed by PostgreSQL. Only three Compose services exist: postgres, backend and frontend.
+After approval, adapt the inherited application deliberately:
 
-Do not add authentication, attendee records, editing, deletion, pagination, analytics, Redis, Celery, a reverse proxy, a second database, Kubernetes or AWS resources in this stage. Attendee count is a stored integer, not a relationship to users. Do not invent week-over-week statistics. Styling against the Lab 1 reference images is a later review step when those images are supplied.
+- Keep FastAPI, SQLAlchemy, Alembic, React, Vite, Tailwind and needed shadcn/ui components.
+- Retain Python `pyproject.toml`/`uv.lock` and frontend `package.json`/`package-lock.json`; make dependency installation reproducible.
+- The active slice has only list/create meetings, one page, and a supporting health endpoint. Remove inherited authentication/ownership coupling, participant management, editing/deletion and extra application routes from this slice. Replace tests that assert those superseded contracts with tests of the contract below.
+- Keep UUID meeting identifiers from the source: the assignment specifies an id but does not require integers. Store `attendee_count` as an integer rather than deriving it from participant records.
+- Preserve existing migration files. Add a forward migration, never rewrite applied migration history. Preserve existing meetings and identifiers; backfill counts from existing participant associations before removing obsolete relationships/tables. Remove obsolete non-null ownership/location requirements. Define a real downgrade or explicitly document any irreversible data loss. Review this migration separately before execution on any database with valuable data.
+- Local frontend serving becomes Vite on port 5173. Remove the local Nginx configuration and proxy dependency; no reverse proxy is needed for this slice. Production frontend deployment will use S3/CloudFront, not a server container.
+- Keep inherited CI/Makefile/infra files as source material, not as evidence that deployment works. Update their references only when needed, and review their AWS behavior before running any provisioning or deployment target. Do not add Cognito, Lambda or unrelated infrastructure to the required ECS/S3 deployment.
+- Root standalone `main.py` and `pyproject.toml`, Lambda-specific files and seed logic are not part of the slice. Remove them after confirming no retained tooling needs them. No seeding is needed.
 
-CI, linters and AWS deployment are required later in the lab, but their configuration must be specified and reviewed in a subsequent revision before implementation. This initial specification covers local structure only.
+No Redis, Celery, cache, extra database, Kubernetes, authentication or invented analytics. Do not invent week-over-week numbers. Reference-image styling comes after functionality, when the Lab 1 screenshots are supplied.
 
-## Pinned baseline
+## 3. Version policy
 
-These are deliberate reproducible baseline choices, not claims about the latest releases. Verify package compatibility before implementation; propose any changes to this document for review rather than silently substituting versions.
+Pin exact direct dependency versions and commit transitive lockfiles. No `latest`, caret, tilde or lower-bound-only dependency declarations. Use frozen Python lock installation and `npm ci`. Keep existing compatible locked package versions where possible; do not downgrade solely to match an example. The inventory below is taken from the inherited lockfiles, not from a successful install. Validate package availability and compatibility before generation; if validation fails, propose and record replacement pins before code changes.
 
-| Component | Version |
+Chosen container/runtime versions:
+
+| Component | Pin |
 | --- | --- |
-| Backend base image | python:3.12.10-slim-bookworm |
-| PostgreSQL image | postgres:16.8-bookworm |
-| Frontend base image | node:22.14.0-bookworm-slim |
-| FastAPI | 0.115.12 |
-| Uvicorn | 0.34.2 |
-| SQLAlchemy | 2.0.40 |
-| Alembic | 1.15.2 |
-| Psycopg binary driver | 3.2.6 |
-| Pydantic | 2.11.3 |
-| React and React DOM | 19.0.0 |
-| Vite | 6.2.6 |
-| Vite React plugin | 4.4.1 |
-| TypeScript | 5.8.3 |
-| Tailwind CSS and its Vite plugin | 4.1.3 |
-| shadcn CLI (generation only) | 2.5.0 |
+| Python backend base | python:3.12.10-slim-bookworm |
+| PostgreSQL | postgres:16.8-bookworm |
+| Frontend Node base | node:24.0.0-bookworm-slim |
 
-shadcn/ui components are committed source files, not a runtime service or a monolithic library dependency. Use only the button, input, label and card primitives needed for this page. Pin every additional direct dependency needed by those components to an exact version in package.json and commit package-lock.json; installation uses npm ci. Backend dependencies, including transitive dependencies, belong in a committed exact-version requirements.txt. No latest tags or floating dependency ranges.
+Use uv image ghcr.io/astral-sh/uv:0.6.17 to supply the installer. Validate runtime and lockfile compatibility before generation; amend pins rather than silently changing them. shadcn/ui consists of committed component source, not a separate runtime service; retain only the primitives needed by the list/form. Existing dependency version ranges are not acceptable final pins.
 
-## Repository structure
+Required backend direct pins from uv.lock: FastAPI 0.141.1, Uvicorn 0.53.0, SQLAlchemy 2.0.54, Alembic 1.20.0, Psycopg 3.3.6, Pydantic 2.13.5, pydantic-settings 2.15.0. Retain appropriate standard/binary extras. Test/lint pins: pytest 9.1.1, httpx 0.28.1, Ruff 0.16.8. Remove Mangum and PyJWT from the slice when their Lambda/auth consumers are removed.
 
-The following is the intended layout after approval and generation, not a claim that these files already exist.
+Required frontend direct pins from package-lock.json: React/react-dom 19.3.0, class-variance-authority 0.7.1, clsx 2.1.1, radix-ui 1.6.7, tailwind-merge 3.7.0, lucide-react 1.47.0. Keep only dependencies actually used by the minimal components; remove the inherited router, command menu, authentication, theme, toast and form/query abstractions if no longer used.
 
-| Path | Purpose and boundary |
+Frontend build/test/lint pins from package-lock.json: Vite 8.3.0, @vitejs/plugin-react 6.1.1, TypeScript 6.0.3, Tailwind/@tailwindcss/vite 4.3.3, @types/node 26.6.2, @types/react/@types/react-dom 19.3.0, @eslint/js 10.0.1, ESLint 10.11.0, eslint-plugin-react-hooks 7.1.1, eslint-plugin-react-refresh 0.5.7, globals 17.12.0, typescript-eslint 8.70.0, Prettier 3.9.8, prettier-plugin-tailwindcss 0.8.1, Vitest 4.1.11, jsdom 29.1.1, @testing-library/jest-dom 7.0.1, @testing-library/react 16.3.3, @testing-library/user-event 14.6.7. Retain tw-animate-css 1.4.0 only if UI styling imports it. Review the Node type/runtime major mismatch during compatibility validation; do not assume lockfile presence proves compatibility.
+
+## 4. Folder and file responsibilities
+
+Every generated or retained active folder must have a purpose below. Do not create empty placeholders.
+
+| Path | Purpose |
 | --- | --- |
-| PROJECT.md | Reviewed source of truth for structure and contracts. |
-| README.md | Startup command, local URLs, prerequisites and troubleshooting; distinguish development defaults from production configuration. |
-| .gitignore | Exclude secrets, local environment overrides, virtual environments, node_modules, build outputs and editor artifacts. |
-| docker-compose.yml | Coordinate the three local services, configuration, ports, readiness and the database volume. |
-| backend/ | Python API and database migrations; does not contain frontend code. |
-| backend/Dockerfile | Build a runnable API image; no database connection or migration during image build. |
-| backend/requirements.txt | Exact Python runtime and transitive dependency pins. |
-| backend/alembic.ini | Alembic configuration; database URL comes from the environment, not a committed production credential. |
-| backend/app/ | Backend Python package; package marker files have no business logic. |
-| backend/app/main.py | Assemble FastAPI, allowed origins and routes. |
-| backend/app/config.py | Read and validate environment configuration. |
-| backend/app/db.py | SQLAlchemy engine, session lifecycle and declarative base; request-scoped sessions. |
-| backend/app/api/ | HTTP routes for meetings and health; status codes and request/response adaptation, not database schema definitions. |
-| backend/app/models/ | SQLAlchemy meeting table mapping and database constraints. |
-| backend/app/schemas/ | Pydantic creation and response contracts and input validation. |
-| backend/app/services/ | Meeting listing and creation, transaction boundaries and storage-error translation; no HTTP request parsing. |
-| backend/alembic/ | Versioned schema history and migration environment. |
-| backend/alembic/versions/ | Initial meetings-table migration with upgrade and downgrade operations. |
-| frontend/ | Single-page React client and its build configuration; no database access. |
-| frontend/Dockerfile | Install locked dependencies and run the local Vite server. |
-| frontend/package.json | Exact direct dependency pins and development/build scripts. |
-| frontend/package-lock.json | Reproducible frontend dependency resolution. |
-| frontend/index.html | Vite HTML entry point. |
-| frontend/vite.config.ts | React and Tailwind integration, server binding and port. |
-| frontend/tsconfig*.json | TypeScript configuration for application and build tooling. |
-| frontend/src/ | Client application source. |
-| frontend/src/main.tsx | Mount React and import styles. |
-| frontend/src/App.tsx | Assemble the meeting list and creation form on one page. |
-| frontend/src/components/ | Meeting list and creation form; loading, empty, error and submitting states. |
-| frontend/src/components/ui/ | Only the required committed shadcn/ui primitives. |
-| frontend/src/lib/ | Typed API client and utilities required by the UI primitives; no business database logic. |
-| frontend/src/styles.css | Tailwind import and shared visual tokens. |
+| PROJECT.md | Human-reviewed structure and contracts. |
+| README.md | Prerequisites, one-command startup, URLs, troubleshooting and development/production differences. |
+| .gitignore, .env.example | Exclude secrets/generated artifacts; document optional development overrides without real credentials. |
+| compose.yaml | Three-service local orchestration, development defaults, ports, health checks and persistent database volume. |
+| back/ | API, migrations, dependency manifest/lock and Dockerfile. |
+| back/app/ | Python package containing app assembly, environment configuration, ORM engine/session lifecycle, table models and validation schemas. Existing main.py/config.py/db.py/models.py/schemas.py separate these concerns. |
+| back/app/routers/ | HTTP layer: meetings routes and health, validation/status codes, not schema creation or business SQL. |
+| back/app/services/ | Meeting listing/creation, transaction boundaries and storage-error handling. |
+| back/alembic/ | Migration environment and template; obtain database URL from environment. |
+| back/alembic/versions/ | Preserved schema history plus reviewed forward migration for this slice. |
+| back/tests/ | API validation, persistence and health/error-contract checks. |
+| front/ | React application, Dockerfile, exact dependency manifest/lock and Vite/TypeScript/lint configuration. |
+| front/src/ | App mounting, single meeting page, typed contracts and Tailwind styles in index.css. |
+| front/src/components/ | Meeting list and creation form; loading, empty, failure and submission states. |
+| front/src/components/ui/ | Required committed shadcn/ui primitives, such as buttons, inputs, labels and cards. |
+| front/src/lib/ | Typed API client and UI utilities; never database access. |
+| front/src/test/ | Frontend test setup and focused component/client tests. |
+| .github/workflows/ | CI checks; reviewed deployment automation in the later AWS stage. |
+| infra/ | Inherited infrastructure source; review/adapt for the required AWS architecture later. No provisioning during local setup. |
+| Makefile | Local quality commands and later shared deploy-frontend/deploy-backend contracts. CI must invoke the same deploy recipes as developers. |
 
-Do not introduce empty placeholder directories. Every generated directory must have one of the purposes above.
+Dockerfiles answer how an individual service image is built/run. Compose answers how the local services connect and wait; it is not the production ECS architecture.
 
-## Service and readiness contracts
+## 5. Local service contract
 
-Docker Desktop with Compose v2 is the only local prerequisite. A clean checkout starts with docker compose up; docker compose up --build explicitly rebuilds images after changes. No host Python, Node, manual migration, environment-file copying or manual database setup is required.
+Docker Desktop with Compose v2 is the only required local runtime. A clean checkout starts with `docker compose up`; use `docker compose up --build` to explicitly rebuild after changes. No manual .env copy, host Python/Node install, manual database setup or manual migration.
 
-| Service | Listen address and published port | Dependencies and readiness |
+| Service | Container / host port | Dependencies and readiness |
 | --- | --- | --- |
-| postgres | Container TCP 5432; no host port published | No upstream dependency. Health check uses pg_isready with the configured database/user: interval 5s, timeout 5s, start period 10s, retries 12. |
-| backend | 0.0.0.0:8000; host 8000 maps to 8000 | Wait for postgres with depends_on condition service_healthy. At container start run alembic upgrade head, then Uvicorn. Migration failure prevents API startup. Health check calls /api/health using Python's standard library: interval 5s, timeout 5s, start period 20s, retries 12. |
-| frontend | 0.0.0.0:5173; host 5173 maps to 5173 | Wait for backend with depends_on condition service_healthy. Run Vite with a strict port. Vite binding makes it reachable from the host browser. |
+| db | PostgreSQL 5432; no host port published | No upstream dependency. pg_isready checks configured database/user; interval 5s, timeout 5s, start period 10s, retries 12. |
+| backend | 0.0.0.0:8000 / localhost:8000 | depends_on db with condition service_healthy. At container startup run alembic upgrade head, then Uvicorn; migration failure prevents serving. Python standard-library HTTP health check calls /api/health; interval 5s, timeout 5s, start period 20s, retries 12. |
+| frontend | Vite 0.0.0.0:5173 / localhost:5173 | depends_on backend with condition service_healthy; Vite strict port. No Nginx/proxy. |
 
-Local addresses are http://localhost:5173 for the frontend and http://localhost:8000 for the backend. Compose service names resolve only inside the Compose network; the browser must call localhost:8000, not backend:8000.
+Compose provides development-only defaults: database/user/password `spry`/`spry`/`spry`, backend DATABASE_URL using the `db` hostname and Psycopg driver, CORS_ORIGINS allowing exactly http://localhost:5173, and frontend VITE_API_URL equal to http://localhost:8000. Keep the source's VITE_API_URL name; do not invent a second configuration key. Browser requests use localhost, never the Compose hostname `backend`. VITE variables are public configuration, never secrets.
 
-Postgres owns a named volume mounted at /var/lib/postgresql/data. Compose restart/down must preserve meetings; docker compose down -v intentionally removes them. Database schema changes belong to Alembic, never Base.metadata.create_all(). No seed data is required: the first list is empty until a meeting is created.
+Optional ignored environment overrides must not be required for startup. No real keys or production passwords are committed. Published API port, development credentials, Vite server and local origins are development-only.
 
-Local Compose supplies explicit development-only POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD, DATABASE_URL, CORS_ORIGINS and VITE_API_BASE_URL defaults. Use database spry and development-only user/password spry/spry; backend DATABASE_URL uses the postgres hostname and Psycopg driver. CORS allows exactly http://localhost:5173. VITE_API_BASE_URL is http://localhost:8000. Local overrides are optional and ignored by Git. No real credentials or production secrets are committed. VITE-prefixed settings are public browser configuration, never secrets.
+Database volume `pgdata` mounts at /var/lib/postgresql/data. Restart and compose down preserve data; down -v intentionally destroys it. Migrations run at startup, not image build. Never use Base.metadata.create_all() for schema management. Copy source into application images initially; rebuild after changes instead of adding bind-mount complexity.
 
-Compose images use the declared base versions; each application service builds its own Dockerfile. Keep initial setup simple: source is copied into the images rather than bind-mounted, so application changes require a rebuild. The frontend development server, local passwords, published API port and local origins are development-only choices, not a production deployment recipe.
+Readiness is not permanent availability. Enable SQLAlchemy pool_pre_ping and bounded database connection/query timeouts. If the database later disappears, roll back transactions, return a generic HTTP 503 for database-backed requests and log diagnostics without exposing SQL or credentials. Do not retry POST automatically: the commit outcome may be uncertain. New requests recover after connectivity returns.
 
-Readiness is not permanent availability. Enable SQLAlchemy pool_pre_ping. If Postgres disappears later, database-backed requests fail promptly with HTTP 503 and a generic detail message; transactions roll back, server logs retain diagnostics and no credentials or SQL internals are exposed to clients. Do not automatically retry a creation request because its transaction outcome may be uncertain. New requests can succeed again after connectivity returns. Frontend errors must be visible rather than appearing as empty successful results.
+## 6. Concrete meeting/API contract
 
-## Database and API contract
+Public meeting fields, and no others:
 
-A meeting has exactly these public fields:
-
-| Field | Type and rules |
+| Field | Type/rules |
 | --- | --- |
-| id | Positive integer generated by the database; clients cannot choose it. |
-| title | String, trim surrounding whitespace, length 1–200 after trimming. |
-| starts_at | Timezone-aware ISO 8601 timestamp; an offset or Z is mandatory. |
-| ends_at | Timezone-aware ISO 8601 timestamp; strictly later than starts_at. |
-| attendee_count | Integer greater than or equal to zero; not a boolean or numeric string. |
+| id | Database-generated UUID, serialized as a canonical UUID string; not client-selectable. |
+| title | String trimmed of surrounding whitespace, length 1–200 after trimming. |
+| starts_at | Timezone-aware ISO 8601 string, offset or Z mandatory. |
+| ends_at | Timezone-aware ISO 8601 string, strictly after starts_at. |
+| attendee_count | Strict integer >= 0; no booleans or numeric strings. |
 
-Store times as PostgreSQL timestamp with time zone and serialize API responses in UTC with Z. The database enforces non-null fields, positive duration and nonnegative attendee count. The initial migration creates only the meetings table and these constraints. SQLAlchemy defines the matching mapping; Alembic owns schema changes.
+PostgreSQL stores timezone-aware timestamps; responses serialize UTC with Z. Database constraints enforce non-null fields, valid duration and nonnegative count. Title validation remains authoritative in the API, with matching storage length. No uniqueness restriction on title.
 
 ### GET /api/meetings
 
-Return HTTP 200 with an application/json array of meeting objects containing exactly the five fields above. No envelope, pagination or extra fields. Return an empty array if no meetings exist. Sort by starts_at ascending, then id ascending for a deterministic tie-breaker.
+HTTP 200, application/json array. Each element contains exactly the five fields above. Empty database returns an empty array. Order starts_at ascending then id ascending. No envelope, pagination or authentication.
 
 ### POST /api/meetings
 
-Accept application/json with exactly title, starts_at, ends_at and attendee_count. All four fields are required; unknown fields, including id, are rejected. Validate the rules above before writing. Commit exactly one row and return HTTP 201 with its complete meeting object, including the generated id. Invalid input returns HTTP 422 using FastAPI's standard validation-error detail array. There is no authentication or duplicate-title prohibition in this slice.
+JSON object with exactly title, starts_at, ends_at and attendee_count; all required. Reject unknown fields including id. Validate before writing, commit one meeting, return HTTP 201 with the complete five-field object. Validation failures return HTTP 422 with FastAPI's standard validation detail array. Database unavailability returns HTTP 503 with a generic detail message. No ownership or participant IDs.
 
 ### GET /api/health
 
-This is the only supporting endpoint beyond the meetings contract. It performs a lightweight database check. Return HTTP 200 with status equal to ok when the database is reachable; otherwise HTTP 503 with a generic detail message. It must not disclose connection details. It is used for local readiness and can later support an ALB health check.
+Supporting readiness endpoint, not another product feature. Lightweight database query; HTTP 200 with status equal to ok if reachable, otherwise HTTP 503 with status equal to unavailable. Keep this inherited health response shape. Never expose connection information.
 
-The frontend API client mirrors these field names and response shapes. The browser never talks to PostgreSQL. The HTTP layer validates schemas, the service layer coordinates ORM work and transactions, and the model layer represents the table.
+HTTP routers validate/adapt, services own ORM operations/transactions, schemas define public contracts and models define storage. Browser never connects directly to PostgreSQL.
 
-## Frontend interaction contract
+## 7. Frontend contract
 
-One page shows a heading, meeting list and creation form. Each listed meeting shows its title, start, end and attendee count. Render timestamps in the browser's local timezone and make that timezone clear.
+One page shows a heading, list and creation form. Each meeting shows title, start, end and attendee count. Show a clear timezone label and render times in the browser's local timezone.
 
-The form contains title, local start/end datetime inputs and attendee count. Convert local datetime input values to UTC ISO 8601 timestamps before sending; reject invalid dates, nonpositive duration and invalid counts. Backend validation remains authoritative.
+Form fields: title, local start/end datetime inputs and attendee count. Convert valid local datetime values to UTC ISO 8601 before sending; validate duration/count client-side while retaining backend authority.
 
-Initial page load fetches the list. Show loading, empty and error states distinctly. During creation disable duplicate submission. After HTTP 201 reset the form and fetch the ordered list again. If creation succeeds but the refresh fails, report that distinction rather than telling the user creation failed. Failed requests preserve form input and present readable errors. Do not automatically retry POST requests.
+Fetch on initial load. Distinguish loading, empty and error states. Disable duplicate submits. On HTTP 201 reset the form and fetch the sorted list again. If creation succeeds but refresh fails, say so instead of calling creation a failure. Preserve input on failed creation. No automatic POST retries and no fake data masking errors.
 
-## Review and local acceptance gate
+## 8. Review gate and local acceptance
 
-Before code generation, the human reviewer checks folder purposes, exclusions, exact pins, date/count contracts and health-based startup ordering. Amend this specification before implementing any changed decision.
+Before generating changes, review this document line by line, validate the listed dependency pins, and approve the inherited-code adaptation and migration plan. Commit the approved specification before code generation.
 
-After generation, verify:
+Then generate only the approved slice and review the diff. Verify:
 
-- A clean checkout starts with docker compose up --build without manual setup.
-- PostgreSQL becomes healthy before migrations; migrations run before API serving.
-- Frontend startup waits for backend readiness.
-- GET /api/meetings initially returns an empty array on a fresh volume.
-- Creating a valid meeting returns HTTP 201 and it appears in the frontend.
-- Reloading the page and restarting Compose preserve the meeting.
-- Invalid titles, naive timestamps, invalid duration and negative counts return HTTP 422 without creating rows.
-- Database unavailability produces HTTP 503 and a visible client error rather than a successful empty list.
-- No application code, infrastructure or real secrets are added before this draft is approved.
+- Clean checkout starts with docker compose up --build without preparation.
+- Database health precedes migrations; migrations precede backend serving; backend health precedes frontend startup.
+- Fresh database lists no meetings; creating a meeting returns 201 and displays it.
+- Reload and Compose restart preserve meetings.
+- Invalid titles, naive timestamps, duration/count violations and unknown fields return 422 without rows being added.
+- Database outages produce 503 and visible client errors, not successful empty results.
+- Only three Compose services exist; no extra product routes or authentication remain active.
+
+## 9. Later lab stages — not local implementation scope yet
+
+After local acceptance: match supplied Spry screenshots; run Ruff, ESLint and Prettier locally and in Actions on every push; demonstrate a deliberate red lint commit on a temporary branch.
+
+Review AWS account security, costs and database hosting before provisioning. The assignment leaves production PostgreSQL hosting unspecified: propose RDS and obtain approval rather than silently creating a billable database.
+
+Required later deployment: private S3 through CloudFront for the frontend; commit-SHA-tagged ECR image on ECS Fargate behind an HTTPS ALB for the backend; own app/api domains and ACM certificates; GitHub OIDC trust restricted to this repository and main; green checks gate deployment using the same Makefile targets as local deploys. CloudFront certificate is in us-east-1; ALB certificate is in its region. Define controlled production migrations, rollback and teardown before deployment.
+
+Submission: accessible personal repository, screenshot of frontend meeting list, and reachable HTTPS frontend/backend URLs on the user's domain. No AWS access keys in source or GitHub secrets.
