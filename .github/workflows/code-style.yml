@@ -12,6 +12,23 @@ permissions:
   contents: read
 
 jobs:
+  infrastructure:
+    name: Infrastructure validation (no AWS credentials)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+      - name: Install pinned infrastructure tools
+        run: python -m pip install -r infra/requirements.lock
+      - name: Template and deployment tooling checks
+        run: |
+          cfn-lint --regions eu-north-1 --template infra/*.yaml
+          ruff check infra/scripts/deploy.py infra/tests
+          ruff format --check infra/scripts/deploy.py infra/tests
+          python -m unittest discover -s infra/tests -v
+
   backend:
     name: Backend lint and tests
     runs-on: ubuntu-latest

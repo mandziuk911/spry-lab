@@ -1,102 +1,32 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: >-
-  Meetings App - backend on AWS Lambda (container image) behind a public function URL,
-  PostgreSQL on Aurora Serverless v2 that scales to zero. No NAT gateway, no load balancer.
+Description: Spry Free-plan backend - CloudFront-only ALB, ARM64 Fargate and private PostgreSQL.
 
 Parameters:
   ProjectName:
     Type: String
-    Default: meetings
-    Description: Name prefix for all resources.
-
-  # --- Backend (Lambda) ---
+    Default: spry
+    AllowedPattern: "[a-z][a-z0-9-]{0,25}"
+    Description: Resource name prefix and project tag.
   ImageUri:
     Type: String
-    Description: Full backend image URI including tag, e.g. <account>.dkr.ecr.<region>.amazonaws.com/meetings-backend:abc123.
-  Architecture:
-    Type: String
-    Default: arm64
-    AllowedValues: [arm64, x86_64]
-    Description: Must match the platform the image was built for. arm64 (Graviton) is ~20% cheaper.
-  MemorySize:
-    Type: Number
-    Default: 512
-    MinValue: 128
-    MaxValue: 10240
-    Description: Lambda memory in MB (CPU scales with it).
-  Timeout:
-    Type: Number
-    Default: 30
-    MinValue: 3
-    MaxValue: 900
-    Description: >-
-      Seconds per request. Leave room for Aurora to resume from 0 ACU (about 15 s) on the first request.
-  CorsOrigins:
-    Type: String
-    Default: http://localhost:3000,http://localhost:5173
-    Description: Comma-separated browser origins allowed to call the API (the Makefile adds the frontend's).
-  Seed:
-    Type: String
-    Default: "false"
-    AllowedValues: ["true", "false"]
-    Description: Insert sample participants when migrations run and the table is empty.
-  LogRetentionDays:
-    Type: Number
-    Default: 7
-
-  # --- Auth (from the Cognito stack; the Makefile passes them) ---
-  CognitoUserPoolId:
-    Type: String
-    Description: User pool whose ID tokens the API accepts.
-  CognitoClientId:
-    Type: String
-    Description: App client the tokens must be issued to (their aud claim).
-  CognitoJwks:
-    Type: String
-    Description: >-
-      The pool's public signing keys (JWKS JSON). Passed in because the function has no internet
-      route to download them; Cognito does not rotate user pool keys.
-
-  # --- Database (Aurora Serverless v2, PostgreSQL) ---
-  DbEngineVersion:
-    Type: String
-    Default: "16.14"
-    Description: Aurora PostgreSQL version; scaling to 0 ACU needs 13.15+, 14.12+, 15.7+ or 16.3+.
-  DbMinCapacity:
+    AllowedPattern: "[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com(\\.cn)?/[a-z0-9][a-z0-9._/-]*:[0-9a-f]{40}"
+    Description: ECR image URI tagged with the full reviewed 40-character commit SHA.
+  DesiredCount:
     Type: Number
     Default: 0
-    MinValue: 0
-    MaxValue: 256
-    Description: Minimum ACUs. 0 lets the database pause when idle, so you pay only for storage.
-  DbMaxCapacity:
-    Type: Number
-    Default: 1
-    MinValue: 1
-    MaxValue: 256
-    Description: Maximum ACUs (1 ACU is about 2 GiB of memory).
-  DbSecondsUntilAutoPause:
-    Type: Number
-    Default: 300
-    MinValue: 300
-    MaxValue: 86400
-    Description: Idle seconds without connections before the database pauses (only when DbMinCapacity is 0).
-  DbName:
+    AllowedValues: [0, 1]
+    Description: Keep zero until the controlled one-shot migration succeeds.
+  OriginToken:
     Type: String
-    Default: meetings
-  DbUsername:
+    NoEcho: true
+    AllowedPattern: "[0-9a-fA-F]{64}"
+    Description: Secret 64-hex CloudFront X-Spry-Origin header value.
+  CloudFrontPrefixListId:
     Type: String
-    Default: meetings
-  DbBackupRetentionDays:
-    Type: Number
-    Default: 1
-    MinValue: 1
-    MaxValue: 35
+    AllowedPattern: "pl-[0-9a-f]+"
+    Description: Regional CloudFront origin-facing managed prefix list (Stockholm pl-fab65393).
 
 Resources:
-  # =====================================================================
-  # Network: two private subnets (Aurora needs two AZs). Nothing here is reachable from the
-  # internet; the function URL is served by the Lambda service, not from inside the VPC.
-  # =====================================================================
   Vpc:
     Type: AWS::EC2::VPC
     Properties:
@@ -104,226 +34,365 @@ Resources:
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
-        - { Key: Name, Value: !Sub "${ProjectName}-vpc" }
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-
+        - {Key: Name, Value: !Sub "${ProjectName}-vpc"}
+        - {Key: Project, Value: !Ref ProjectName}
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: 10.20.0.0/24
+      Tags:
+        - {Key: Name, Value: !Sub "${ProjectName}-public-1"}
+        - {Key: Project, Value: !Ref ProjectName}
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: 10.20.1.0/24
+      Tags:
+        - {Key: Name, Value: !Sub "${ProjectName}-public-2"}
+        - {Key: Project, Value: !Ref ProjectName}
   PrivateSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref Vpc
       AvailabilityZone: !Select [0, !GetAZs ""]
-      CidrBlock: !Select [0, !Cidr [!GetAtt Vpc.CidrBlock, 2, 8]]
+      CidrBlock: 10.20.2.0/24
       Tags:
-        - { Key: Name, Value: !Sub "${ProjectName}-private-1" }
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-
+        - {Key: Name, Value: !Sub "${ProjectName}-private-1"}
+        - {Key: Project, Value: !Ref ProjectName}
   PrivateSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref Vpc
       AvailabilityZone: !Select [1, !GetAZs ""]
-      CidrBlock: !Select [1, !Cidr [!GetAtt Vpc.CidrBlock, 2, 8]]
+      CidrBlock: 10.20.3.0/24
       Tags:
-        - { Key: Name, Value: !Sub "${ProjectName}-private-2" }
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-
-  # --- Security groups ---
-  BackendSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
+        - {Key: Name, Value: !Sub "${ProjectName}-private-2"}
+        - {Key: Project, Value: !Ref ProjectName}
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
     Properties:
-      GroupDescription: Backend Lambda - outbound to the database only
       VpcId: !Ref Vpc
       Tags:
-        - { Key: Name, Value: !Sub "${ProjectName}-backend" }
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-
-  DbSecurityGroup:
+        - {Key: Project, Value: !Ref ProjectName}
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+  # The private route table has only the VPC-local route: no NAT or endpoints.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  PrivateSubnet1RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnet2RouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+  LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: PostgreSQL - only from the backend Lambda
+      GroupDescription: HTTP only from CloudFront origin-facing addresses
       VpcId: !Ref Vpc
       SecurityGroupIngress:
-        - { IpProtocol: tcp, FromPort: 5432, ToPort: 5432, SourceSecurityGroupId: !Ref BackendSecurityGroup }
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !Ref CloudFrontPrefixListId
       Tags:
-        - { Key: Name, Value: !Sub "${ProjectName}-db" }
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-
-  # =====================================================================
-  # Database
-  # =====================================================================
-  # Generated once; resolved at deploy time into the cluster and the function's environment,
-  # so the Lambda needs no route to Secrets Manager (and the VPC no NAT gateway or endpoint).
-  DbSecret:
-    Type: AWS::SecretsManager::Secret
+        - {Key: Project, Value: !Ref ProjectName}
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
     Properties:
+      GroupDescription: API ingress only from the ALB; outbound for database and AWS services
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
       Tags:
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-      Description: !Sub Master credentials of the ${ProjectName} Aurora cluster
+        - {Key: Project, Value: !Ref ProjectName}
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL only from service and controlled migration tasks
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref TaskSecurityGroup
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  DatabaseCredentials:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub "${ProjectName} PostgreSQL master credentials"
       GenerateSecretString:
-        SecretStringTemplate: !Sub '{"username": "${DbUsername}"}'
+        SecretStringTemplate: '{"username":"spry"}'
         GenerateStringKey: password
         PasswordLength: 32
         ExcludePunctuation: true
-
-  DbSubnetGroup:
+        IncludeSpace: false
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  DatabaseSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      Tags:
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-      DBSubnetGroupDescription: !Sub ${ProjectName} database subnets
+      DBSubnetGroupDescription: Private isolated PostgreSQL subnets
       SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
-
-  DbCluster:
-    Type: AWS::RDS::DBCluster
-    # A final snapshot is kept when the stack is deleted.
-    DeletionPolicy: Snapshot
-    UpdateReplacePolicy: Snapshot
-    Properties:
       Tags:
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-      DBClusterIdentifier: !Sub ${ProjectName}-db
-      Engine: aurora-postgresql
-      EngineVersion: !Ref DbEngineVersion
-      DatabaseName: !Ref DbName
-      MasterUsername: !Ref DbUsername
-      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DbSecret}:SecretString:password}}"
-      DBSubnetGroupName: !Ref DbSubnetGroup
-      VpcSecurityGroupIds: [!Ref DbSecurityGroup]
-      StorageEncrypted: true
-      CopyTagsToSnapshot: true
-      BackupRetentionPeriod: !Ref DbBackupRetentionDays
-      DeletionProtection: false
-      ServerlessV2ScalingConfiguration:
-        MinCapacity: !Ref DbMinCapacity
-        MaxCapacity: !Ref DbMaxCapacity
-        SecondsUntilAutoPause: !Ref DbSecondsUntilAutoPause
-
-  DbInstance:
+        - {Key: Project, Value: !Ref ProjectName}
+  Database:
     Type: AWS::RDS::DBInstance
+    Metadata:
+      cfn-lint:
+        config:
+          # Tool's bundled version list stops at 16.11; live Stockholm
+          # describe-orderable-db-instance-options confirms 16.15/t4g.micro/gp3.
+          ignore_checks: [E3691]
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
-      Tags:
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-      DBInstanceIdentifier: !Sub ${ProjectName}-db-1
-      DBClusterIdentifier: !Ref DbCluster
-      Engine: aurora-postgresql
-      DBInstanceClass: db.serverless
+      DBInstanceIdentifier: !Sub "${ProjectName}-db"
+      Engine: postgres
+      EngineVersion: "16.15"
+      DBInstanceClass: db.t4g.micro
+      DBName: spry
+      MasterUsername: spry
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DatabaseCredentials}:SecretString:password}}"
+      AllocatedStorage: "20"
+      StorageType: gp3
+      StorageEncrypted: true
+      MultiAZ: false
       PubliclyAccessible: false
-      AutoMinorVersionUpgrade: true
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
+      BackupRetentionPeriod: 7
+      DeleteAutomatedBackups: false
+      DeletionProtection: true
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: false
       EnablePerformanceInsights: false
-
-  # =====================================================================
-  # Lambda
-  # =====================================================================
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  # Resolve credentials only into Secrets Manager, never into the task definition.
+  DatabaseUrlSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Description: !Sub "${ProjectName} TLS PostgreSQL connection URL"
+      SecretString: !Sub "postgresql+psycopg://spry:{{resolve:secretsmanager:${DatabaseCredentials}:SecretString:password}}@${Database.Endpoint.Address}:5432/spry?sslmode=require"
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
   BackendLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
+      LogGroupName: !Sub "/ecs/${ProjectName}-backend"
+      RetentionInDays: 7
       Tags:
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-      LogGroupName: !Sub /aws/lambda/${ProjectName}-backend
-      RetentionInDays: !Ref LogRetentionDays
-
-  # Logs and the network interfaces Lambda needs to join the VPC; the app needs nothing else
-  # (tokens are verified with the JWKS from the environment, without calling Cognito).
-  BackendRole:
+        - {Key: Project, Value: !Ref ProjectName}
+  TaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      Tags:
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal: { Service: lambda.amazonaws.com }
+            Principal: {Service: ecs-tasks.amazonaws.com}
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-
-  BackendFunction:
-    Type: AWS::Lambda::Function
-    # The function is usable only once the database instance exists.
-    DependsOn: DbInstance
-    Properties:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+      Policies:
+        - PolicyName: ReadDatabaseUrl
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseUrlSecret
       Tags:
-        - Key: PROJECT_NAME
-          Value: !Ref ProjectName
-      FunctionName: !Sub ${ProjectName}-backend
-      PackageType: Image
-      Code:
-        ImageUri: !Ref ImageUri
-      Architectures: [!Ref Architecture]
-      MemorySize: !Ref MemorySize
-      Timeout: !Ref Timeout
-      Role: !GetAtt BackendRole.Arn
-      LoggingConfig:
-        LogGroup: !Ref BackendLogGroup
-      VpcConfig:
-        SubnetIds: [!Ref PrivateSubnet1, !Ref PrivateSubnet2]
-        SecurityGroupIds: [!Ref BackendSecurityGroup]
-      Environment:
-        Variables:
-          DB_HOST: !GetAtt DbCluster.Endpoint.Address
-          DB_PORT: !GetAtt DbCluster.Endpoint.Port
-          DB_NAME: !Ref DbName
-          DB_USER: !Ref DbUsername
-          DB_PASSWORD: !Sub "{{resolve:secretsmanager:${DbSecret}:SecretString:password}}"
-          # Close connections after each request: Aurora pauses only when none are open.
-          DB_NULL_POOL: "true"
-          CORS_ORIGINS: !Ref CorsOrigins
-          SEED: !Ref Seed
-          COGNITO_REGION: !Ref AWS::Region
-          COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
-          COGNITO_CLIENT_ID: !Ref CognitoClientId
-          COGNITO_JWKS: !Ref CognitoJwks
-
-  # Public HTTPS endpoint of the function; this is the backend URL the frontend is built with.
-  BackendFunctionUrl:
-    Type: AWS::Lambda::Url
+        - {Key: Project, Value: !Ref ProjectName}
+  Cluster:
+    Type: AWS::ECS::Cluster
     Properties:
-      TargetFunctionArn: !Ref BackendFunction
-      AuthType: NONE
-
-  # A public function URL needs both permissions.
-  BackendFunctionUrlPermission:
-    Type: AWS::Lambda::Permission
+      ClusterName: !Sub "${ProjectName}-backend"
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
     Properties:
-      FunctionName: !Ref BackendFunction
-      Action: lambda:InvokeFunctionUrl
-      Principal: "*"
-      FunctionUrlAuthType: NONE
-
-  BackendFunctionInvokePermission:
-    Type: AWS::Lambda::Permission
+      Family: !Sub "${ProjectName}-backend"
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: backend
+          Essential: true
+          Image: !Ref ImageUri
+          WorkingDirectory: /app
+          Command: ["uv", "run", "--no-sync", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          PortMappings:
+            - ContainerPort: 8000
+              Protocol: tcp
+          Environment:
+            - Name: CORS_ORIGINS
+              Value: ""
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Ref DatabaseUrlSecret
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BackendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: backend
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn:
+      - InternetGatewayAttachment
+      - PublicDefaultRoute
+      - PublicSubnet1RouteAssociation
+      - PublicSubnet2RouteAssociation
     Properties:
-      FunctionName: !Ref BackendFunction
-      Action: lambda:InvokeFunction
-      Principal: "*"
-      InvokedViaFunctionUrl: true
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+      SecurityGroups: [!Ref LoadBalancerSecurityGroup]
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref Vpc
+      TargetType: ip
+      Protocol: HTTP
+      Port: 8000
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /api/health
+      Matcher: {HttpCode: "200"}
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "403"
+            ContentType: text/plain
+            MessageBody: Forbidden
+  OriginHeaderRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 1
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: X-Spry-Origin
+            Values: [!Ref OriginToken]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - ALBListener
+      - OriginHeaderRule
+      - PublicDefaultRoute
+      - PublicSubnet1RouteAssociation
+      - PublicSubnet2RouteAssociation
+    Properties:
+      ServiceName: !Sub "${ProjectName}-backend"
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      LaunchType: FARGATE
+      PlatformVersion: "1.4.0"
+      DesiredCount: !Ref DesiredCount
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      HealthCheckGracePeriodSeconds: 60
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+          SecurityGroups: [!Ref TaskSecurityGroup]
+      LoadBalancers:
+        - ContainerName: backend
+          ContainerPort: 8000
+          TargetGroupArn: !Ref TargetGroup
+      EnableECSManagedTags: true
+      PropagateTags: TASK_DEFINITION
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
 
 Outputs:
-  ApiUrl:
-    Description: Backend base URL (Lambda function URL); API routes live under /api.
-    Value: !GetAtt BackendFunctionUrl.FunctionUrl
-  ApiDocsUrl:
-    Description: Swagger UI of the deployed backend.
-    Value: !Sub "${BackendFunctionUrl.FunctionUrl}api/docs"
-  FunctionName:
-    Value: !Ref BackendFunction
-  LogGroupName:
-    Value: !Ref BackendLogGroup
-  DbEndpoint:
-    Description: Aurora writer endpoint (reachable only from inside the VPC).
-    Value: !GetAtt DbCluster.Endpoint.Address
-  DbSecretArn:
-    Description: Secrets Manager secret with the database master credentials.
-    Value: !Ref DbSecret
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !GetAtt Service.Name
+  TaskDefinitionArn:
+    Value: !Ref TaskDefinition
+  PublicSubnetIds:
+    Value: !Join [",", [!Ref PublicSubnet1, !Ref PublicSubnet2]]
+  TaskSecurityGroupId:
+    Value: !Ref TaskSecurityGroup
+  LoadBalancerDomainName:
+    Value: !GetAtt LoadBalancer.DNSName
+  DatabaseIdentifier:
+    Value: !Ref Database
+  DatabaseUrlSecretArn:
+    Value: !Ref DatabaseUrlSecret
