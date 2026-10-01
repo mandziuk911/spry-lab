@@ -3,6 +3,7 @@ import { MeetingForm } from "@/components/MeetingForm"
 import { MeetingList } from "@/components/MeetingList"
 import { Button } from "@/components/ui/button"
 import { deleteMeeting, listMeetings } from "@/lib/api"
+import { isMeetingVisible, useLiveNow } from "@/lib/meetingStatus"
 import type { Meeting } from "@/types"
 
 export default function App() {
@@ -67,6 +68,10 @@ export default function App() {
     )
   }
 
+  const now = useLiveNow()
+  // Expiry is presentation-only. Keep all fetched records in state and in storage.
+  const visibleMeetings = meetings.filter((meeting) => isMeetingVisible(meeting, now))
+  const hiddenCount = meetings.length - visibleMeetings.length
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
   return (
     <div className="desktop">
@@ -106,11 +111,13 @@ export default function App() {
               <dl className="desk-stats">
                 <div>
                   <dt>Meetings listed</dt>
-                  <dd>{meetings.length}</dd>
+                  <dd>{visibleMeetings.length}</dd>
                 </div>
                 <div>
                   <dt>Attendee places</dt>
-                  <dd>{meetings.reduce((sum, meeting) => sum + meeting.attendee_count, 0)}</dd>
+                  <dd>
+                    {visibleMeetings.reduce((sum, meeting) => sum + meeting.attendee_count, 0)}
+                  </dd>
                 </div>
               </dl>
               <p className="sidebar-tip">
@@ -130,6 +137,10 @@ export default function App() {
               <h2 id="list-heading" tabIndex={-1} className="module-heading">
                 Your meetings <span>Appointment book</span>
               </h2>
+              <p className="appointment-note">
+                Status follows the current time. Finished meetings hide after one hour, but stay
+                saved.
+              </p>
               {saved && (
                 <p role="status" className="desk-message">
                   {error
@@ -154,7 +165,12 @@ export default function App() {
                 </div>
               )}
               {(meetings.length > 0 || (!loading && !error)) && (
-                <MeetingList meetings={meetings} onDelete={onDelete} />
+                <MeetingList
+                  meetings={visibleMeetings}
+                  now={now}
+                  hiddenCount={hiddenCount}
+                  onDelete={onDelete}
+                />
               )}
             </section>
             <section id="new-meeting" aria-label="Create a meeting" className="form-module">

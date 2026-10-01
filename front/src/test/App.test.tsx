@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import App from "@/App"
 import { MeetingForm } from "@/components/MeetingForm"
 
@@ -21,6 +21,12 @@ function fill(title = "  Team sync  ", end = "2026-08-10T10:00", count = "4") {
 }
 
 describe("meeting page", () => {
+  beforeEach(() => {
+    // Keep existing CRUD fixtures in the visible future, independent of today's date.
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-08-10T08:00:00Z"))
+  })
+
   it("cancels a named permanent deletion without a request", async () => {
     const fetch = vi.fn().mockResolvedValue(json([meeting]))
     vi.stubGlobal("fetch", fetch)

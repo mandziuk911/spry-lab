@@ -254,6 +254,22 @@
   letter-spacing: 1px;
   margin-bottom: 3px;
 }
+.appointment-scheduled .appointment-kind,
+.appointment-scheduled h3,
+.appointment-finished .appointment-kind,
+.appointment-finished h3 {
+  color: #555e68;
+}
+.appointment-in-progress .appointment-kind,
+.appointment-in-progress h3 {
+  color: #176137;
+}
+.appointment-note {
+  margin: -4px 0 16px;
+  color: #4c5c68;
+  font-size: 12px;
+  line-height: 1.6;
+}
 .date-badge {
   flex-shrink: 0;
   width: 46px;

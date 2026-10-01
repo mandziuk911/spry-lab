@@ -1,14 +1,17 @@
 import { useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { meetingStatus, statusLabels } from "@/lib/meetingStatus"
 import type { Meeting } from "@/types"
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" })
 
 function Appointment({
   meeting,
+  now,
   onDelete,
 }: {
   meeting: Meeting
+  now: number
   onDelete: (meeting: Meeting) => Promise<void>
 }) {
   const [confirming, setConfirming] = useState(false)
@@ -17,6 +20,7 @@ function Appointment({
   const locked = useRef(false)
   const trigger = useRef<HTMLButtonElement>(null)
   const start = new Date(meeting.starts_at)
+  const status = meetingStatus(meeting, now)
 
   async function confirm() {
     if (locked.current) return
@@ -39,14 +43,14 @@ function Appointment({
   }
 
   return (
-    <li className="appointment">
+    <li className={`appointment appointment-${status}`}>
       <div className="appointment-title">
         <span className="date-badge" aria-hidden="true">
           <span>{start.toLocaleDateString(undefined, { month: "short" })}</span>
           <strong>{start.getDate()}</strong>
         </span>
         <div>
-          <p className="appointment-kind">Scheduled conversation</p>
+          <p className="appointment-kind">{statusLabels[status]}</p>
           <h3>{meeting.title}</h3>
         </div>
       </div>
@@ -121,9 +125,13 @@ function Appointment({
 
 export function MeetingList({
   meetings,
+  now,
+  hiddenCount,
   onDelete,
 }: {
   meetings: Meeting[]
+  now: number
+  hiddenCount: number
   onDelete: (meeting: Meeting) => Promise<void>
 }) {
   if (!meetings.length)
@@ -132,14 +140,18 @@ export function MeetingList({
         <span aria-hidden="true" className="empty-icon">
           ✉
         </span>
-        <h3>No meetings yet</h3>
-        <p>Create your first meeting to get started.</p>
+        <h3>{hiddenCount ? "No current meetings" : "No meetings yet"}</h3>
+        <p>
+          {hiddenCount
+            ? "Finished meetings are hidden from this list, not deleted."
+            : "Create your first meeting to get started."}
+        </p>
       </div>
     )
   return (
     <ul className="appointment-list" aria-label="Meetings">
       {meetings.map((meeting) => (
-        <Appointment key={meeting.id} meeting={meeting} onDelete={onDelete} />
+        <Appointment key={meeting.id} meeting={meeting} now={now} onDelete={onDelete} />
       ))}
     </ul>
   )

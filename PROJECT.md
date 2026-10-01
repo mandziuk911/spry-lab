@@ -134,6 +134,14 @@ Fetch on initial load. Distinguish loading, empty and error states. Disable dupl
 
 Each meeting has an accessible Delete control. Ask for confirmation showing the title and stating deletion is permanent; cancel sends no request. Disable duplicate deletion while pending. Successful 204 removes the meeting from the local list and announces success without relying on a refresh. A 404 means another client already removed it: remove the stale item and announce that distinction. Other failures keep the meeting visible and show a retryable error; do not silently treat 503/network failure as deletion success or automatically retry. Preserve form input when another meeting is deleted. Prevent stale list requests or competing creation refreshes from resurrecting a deleted row. A visible note states that this workspace has no accounts and anyone with API access can delete meetings.
 
+### Live meeting status amendment
+
+The human approved automatic statuses driven by the browser's current date/time, not a separate calendar screen or external-calendar integration. Derive status from the existing timezone-aware timestamps: `Scheduled` when now < starts_at; `In progress` when starts_at <= now < ends_at; `Finished` when now >= ends_at. Use readable gray text for Scheduled/Finished and green for In progress, with explicit text labels so color is not the only indication.
+
+Hide a meeting from the default list at now >= ends_at + 3,600,000 milliseconds. This is presentation-only: retain the full fetched array, database row and unchanged API contract. Do not issue DELETE, persist a hidden flag, add a migration, scheduler or dependencies. Refresh the clock every second while mounted and immediately on window focus/document visibility changes to recover after a sleeping/throttled tab. Compare absolute timestamps, not local-clock strings, including across timezone/day/DST boundaries; local rendering stays unchanged.
+
+Sidebar counts reflect visible meetings only. Distinguish a truly empty database from a list containing only hidden finished meetings; explain that finished meetings leave the list after one hour but remain saved. Clock updates must preserve creation drafts and deletion/request race protection. Existing confirmed manual deletion remains permanent and separate from automatic hiding.
+
 Retro styling must retain form validation and loading/empty/error states, keyboard-visible focus, readable contrast, semantic headings/labels and responsive layout on narrow screens. Decorative window controls are not fake interactive actions. No fake stats, external fonts/assets or added dependencies are needed.
 
 ## 8. Review gate and local acceptance
@@ -150,6 +158,7 @@ Then generate only the approved slice and review the diff. Verify:
 - Database outages produce 503 and visible client errors, not successful empty results.
 - Deletion persists after reload/restart; cancel does nothing, unknown UUID yields 404, malformed UUID yields 422 and database outages yield 503.
 - Frontend covers confirmed/cancelled deletion, pending duplicate protection, already-deleted handling, failure retention and preserved form input.
+- Live status covers exact start/end/one-hour boundaries, timezone offsets and day rollover; hiding sends no API mutation and leaves records readable through GET, including after reload. Returning to a backgrounded tab refreshes status without a network request. Clock timers/listeners are cleaned up on unmount.
 - Retro redesign renders at desktop and mobile widths without losing focus visibility or overflowing content.
 - Only three Compose services exist; only the specified meeting routes and supporting health/docs routes remain active, without authentication.
 
