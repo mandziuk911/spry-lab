@@ -204,7 +204,8 @@ Resources:
       PubliclyAccessible: false
       DBSubnetGroupName: !Ref DatabaseSubnetGroup
       VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
-      BackupRetentionPeriod: 7
+      # Free plan rejected seven days; use the API's one-day retention default.
+      BackupRetentionPeriod: 1
       DeleteAutomatedBackups: false
       DeletionProtection: true
       CopyTagsToSnapshot: true
