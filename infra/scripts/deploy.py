@@ -12,8 +12,6 @@ import tarfile
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.error import HTTPError
-from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT = "673478369996"
@@ -554,14 +552,28 @@ def verify_protected_backend(authentication):
     site = outputs("frontend")["SiteUrl"]
     if not re.fullmatch(r"https://[a-z0-9]+\.cloudfront\.net", site):
         raise RuntimeError("Unexpected site origin")
-    try:
-        with urlopen(site + "/api/meetings", timeout=20):
-            raise RuntimeError("Anonymous meeting access is not blocked")
-    except HTTPError as response:
-        if response.code != 401 or response.headers.get("WWW-Authenticate") != "Bearer":
-            raise RuntimeError("API authentication probe failed") from None
-        if json.loads(response.read(4096)).get("detail") != "Unauthorized":
-            raise RuntimeError("API authentication probe did not return JSON 401")
+    # Use the platform CA store via curl; TLS verification is never disabled.
+    response = execute(
+        [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "20",
+            "--include",
+            "--write-out",
+            "\\n%{http_code}",
+            site + "/api/meetings",
+        ],
+        capture=True,
+    )
+    content, status = response.rsplit("\n", 1)
+    if status != "401" or not re.search(
+        r"(?im)^www-authenticate:\s*Bearer\s*$", content
+    ):
+        raise RuntimeError("API authentication probe failed")
+    if json.loads(content.split("\n\n", 1)[1]).get("detail") != "Unauthorized":
+        raise RuntimeError("API authentication probe did not return JSON 401")
 
 
 def frontend():
