@@ -33,9 +33,19 @@ export function providerSettings(config: AuthConfig): AuthProviderProps & UserMa
     redirect_uri: `${window.location.origin}/auth/callback/`,
     response_type: "code",
     scope: "openid email profile",
+    // Cognito's documented endpoints are fixed by the trusted build-time config.
+    // Avoid a discovery round-trip that can time out in Safari/Private Relay.
+    metadata: {
+      issuer: config.issuer,
+      authorization_endpoint: `${config.domain}/oauth2/authorize`,
+      token_endpoint: `${config.domain}/oauth2/token`,
+      userinfo_endpoint: `${config.domain}/oauth2/userInfo`,
+      jwks_uri: `${config.issuer}/.well-known/jwks.json`,
+      revocation_endpoint: `${config.domain}/oauth2/revoke`,
+    },
     automaticSilentRenew: true,
     maxSilentRenewTimeoutRetries: 0,
-    requestTimeoutInSeconds: 10,
+    requestTimeoutInSeconds: 30,
     // Cognito refresh tokens, never cookie-only hidden iframe renewal.
     userStore: new WebStorageStateStore({
       store: window.sessionStorage,

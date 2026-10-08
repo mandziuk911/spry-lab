@@ -12,6 +12,8 @@ import tarfile
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT = "673478369996"
@@ -330,8 +332,9 @@ def backend():
         "CognitoIssuer": authentication["CognitoIssuer"],
         "CognitoClientId": authentication["CognitoClientId"],
     }
-    # Demo deployments intentionally pause the service while migrating. A failure
-    # retains database/resources and leaves serving disabled for explicit recovery.
+    # Commit a zero-count maintenance boundary with the previous template first.
+    # A later template rollback must not restore the old serving count/image.
+    maintenance_boundary()
     deploy_stack("backend", "backend.yaml", parameters)
     values = outputs("backend")
     network = {
@@ -424,6 +427,110 @@ def backend():
     print("Backend deployed; public access is through CloudFront only", flush=True)
 
 
+def maintenance_boundary():
+    existing = aws("cloudformation", "list-stacks")["StackSummaries"]
+    if not any(
+        item["StackName"] == f"{PROJECT}-backend"
+        and item["StackStatus"] != "DELETE_COMPLETE"
+        for item in existing
+    ):
+        return  # New stacks start with desired count zero.
+    previous = stack("backend")
+    if previous["StackStatus"] not in {
+        "CREATE_COMPLETE",
+        "UPDATE_COMPLETE",
+        "UPDATE_ROLLBACK_COMPLETE",
+    }:
+        raise RuntimeError("Backend stack needs explicit recovery before deployment")
+    parameters = previous["Parameters"]
+    if not any(p["ParameterKey"] == "DesiredCount" for p in parameters):
+        raise RuntimeError("Cannot establish the backend maintenance boundary")
+    if (
+        next(
+            p["ParameterValue"]
+            for p in parameters
+            if p["ParameterKey"] == "DesiredCount"
+        )
+        != "0"
+    ):
+        with tempfile.TemporaryDirectory(prefix="spry-maintenance-") as directory:
+            path = Path(directory) / "parameters.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "ParameterKey": p["ParameterKey"],
+                            **(
+                                {"ParameterValue": "0"}
+                                if p["ParameterKey"] == "DesiredCount"
+                                else {"UsePreviousValue": True}
+                            ),
+                        }
+                        for p in parameters
+                    ]
+                )
+            )
+            path.chmod(0o600)
+            execute(
+                [
+                    "aws",
+                    "cloudformation",
+                    "update-stack",
+                    "--stack-name",
+                    f"{PROJECT}-backend",
+                    "--use-previous-template",
+                    "--parameters",
+                    f"file://{path}",
+                    "--capabilities",
+                    "CAPABILITY_IAM",
+                ],
+                capture=True,
+            )
+            execute(
+                [
+                    "aws",
+                    "cloudformation",
+                    "wait",
+                    "stack-update-complete",
+                    "--stack-name",
+                    f"{PROJECT}-backend",
+                ]
+            )
+    values = outputs("backend")
+    aws(
+        "ecs",
+        "update-service",
+        "--cluster",
+        values["ClusterName"],
+        "--service",
+        values["ServiceName"],
+        "--desired-count",
+        "0",
+    )
+    execute(
+        [
+            "aws",
+            "ecs",
+            "wait",
+            "services-stable",
+            "--cluster",
+            values["ClusterName"],
+            "--services",
+            values["ServiceName"],
+        ]
+    )
+    service = aws(
+        "ecs",
+        "describe-services",
+        "--cluster",
+        values["ClusterName"],
+        "--services",
+        values["ServiceName"],
+    )["services"][0]
+    if service["desiredCount"] != 0 or service["runningCount"] != 0:
+        raise RuntimeError("Maintenance boundary did not stop serving")
+
+
 def save_manifest(values):
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = STATE / "deployment.json"
@@ -433,11 +540,36 @@ def save_manifest(values):
     path.chmod(0o600)
 
 
+def verify_protected_backend(authentication):
+    parameters = {
+        item["ParameterKey"]: item.get("ParameterValue")
+        for item in stack("backend").get("Parameters", [])
+    }
+    if (
+        parameters.get("CognitoIssuer") != authentication["CognitoIssuer"]
+        or parameters.get("CognitoClientId") != authentication["CognitoClientId"]
+        or parameters.get("DesiredCount") != "1"
+    ):
+        raise RuntimeError("Protected backend must be deployed before frontend")
+    site = outputs("frontend")["SiteUrl"]
+    if not re.fullmatch(r"https://[a-z0-9]+\.cloudfront\.net", site):
+        raise RuntimeError("Unexpected site origin")
+    try:
+        with urlopen(site + "/api/meetings", timeout=20):
+            raise RuntimeError("Anonymous meeting access is not blocked")
+    except HTTPError as response:
+        if response.code != 401 or response.headers.get("WWW-Authenticate") != "Bearer":
+            raise RuntimeError("API authentication probe failed") from None
+        if json.loads(response.read(4096)).get("detail") != "Unauthorized":
+            raise RuntimeError("API authentication probe did not return JSON 401")
+
+
 def frontend():
     guard()
     sha = revision()
     authentication = auth_values()
     backend_values = outputs("backend")
+    verify_protected_backend(authentication)
     deploy_stack(
         "frontend",
         "frontend.yaml",

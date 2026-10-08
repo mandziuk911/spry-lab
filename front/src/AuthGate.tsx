@@ -69,7 +69,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (
-      window.location.pathname !== "/login/" ||
+      !["/login", "/login/"].includes(window.location.pathname) ||
       !config ||
       auth.isLoading ||
       auth.isAuthenticated ||

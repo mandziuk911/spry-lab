@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { createMeeting } from "@/lib/api"
+import { createMeeting, UncertainCreationError } from "@/lib/api"
 import { useSession, assertSession } from "@/lib/session"
 import { readDraft, saveDraft, clearDraft } from "@/lib/drafts"
 
@@ -62,9 +62,11 @@ export function MeetingForm({ onCreated }: Props) {
         ends_at: endsAt.toISOString(),
         attendee_count: attendees,
       })
-    } catch {
+    } catch (error) {
       setError(
-        "Could not create the meeting. Check your details and connection. Your details have been kept.",
+        error instanceof UncertainCreationError
+          ? error.message
+          : "Could not create the meeting. Check your details and connection. Your details have been kept.",
       )
       locked.current = false
       setSubmitting(false)

@@ -1,5 +1,8 @@
 import type { CreateMeeting, Meeting } from "@/types"
 import { assertSession, type Session } from "@/lib/session"
+import { clearDraft } from "@/lib/drafts"
+
+export class UncertainCreationError extends Error {}
 
 async function authorizedFetch(session: Session, url: string, options: RequestInit = {}) {
   assertSession(session)
@@ -7,6 +10,9 @@ async function authorizedFetch(session: Session, url: string, options: RequestIn
     ...options,
     headers: { ...options.headers, Authorization: `Bearer ${session.user.access_token}` },
   })
+  // Preserve a received acknowledgement even if this identity has since expired.
+  // Clear only this identity's draft; never mutate the replacement desk.
+  if (options.method === "POST" && response.status === 201) clearDraft(session.key)
   // A response from a signed-out/previous identity never changes the current desk.
   assertSession(session)
   if (response.status === 401) {
@@ -49,11 +55,23 @@ export async function deleteMeeting(
 }
 
 export async function createMeeting(session: Session, meeting: CreateMeeting): Promise<void> {
-  const response = await authorizedFetch(session, meetingsUrl(), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(meeting),
-  })
+  let response: Response
+  try {
+    response = await authorizedFetch(session, meetingsUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(meeting),
+    })
+  } catch {
+    throw new UncertainCreationError(
+      "Creation was not acknowledged. The meeting may have been saved. Check or reload the meeting list before resubmitting. Your details have been kept; nothing was replayed.",
+    )
+  }
+  if (response.status >= 500) {
+    throw new UncertainCreationError(
+      "Creation was not acknowledged. Check or reload the meeting list before resubmitting. Your details have been kept; nothing was replayed.",
+    )
+  }
   if (response.status !== 201) {
     throw new Error(
       response.status === 422
