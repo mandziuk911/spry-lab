@@ -2,12 +2,12 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 AWS_PROFILE ?= $(if $(AWS_SESSION_TOKEN),,spry)
 
-.PHONY: help start up down logs ps test test-back test-front lint format aws-check deploy deploy-backend deploy-frontend aws-outputs
+.PHONY: help start up down logs ps test test-back test-front lint format aws-check auth-config deploy deploy-auth deploy-backend deploy-frontend aws-outputs
 
 help: ## Show commands; deploys use temporary aws login credentials, never .env keys
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-start: ## Build and start the local app at http://localhost:5173
+start: ## Build/start authenticated local app; run auth-config once first
 	docker compose up -d --build --wait
 
 up: start ## Start local services
@@ -44,7 +44,13 @@ format: ## Format backend/frontend source (host uv and npm required)
 aws-check: ## Verify expected AWS account, ACTIVE Free plan and sufficient credits
 	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py check
 
-deploy: ## Deploy backend then frontend; consumes Free-plan credits
+deploy-auth: ## Deploy reviewed Cognito stack using private local Google OAuth JSON
+	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py auth
+
+auth-config: ## Write ignored public Cognito settings for mandatory local sign-in
+	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py local-auth
+
+deploy: ## Deploy authenticated backend then frontend; auth stack must exist first
 	$(MAKE) deploy-backend
 	$(MAKE) deploy-frontend
 

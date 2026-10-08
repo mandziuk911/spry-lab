@@ -1,6 +1,7 @@
 """Safety gate tests: no network access, real credentials or cloud mutations."""
 
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -150,6 +151,133 @@ class DeploymentSafetyTests(unittest.TestCase):
         ):
             deploy.execute(["aws", "command", secret])
         self.assertNotIn(secret, str(caught.exception))
+
+    def auth_outputs(self):
+        return {
+            "UserPoolId": "eu-north-1_TestPool",
+            "CognitoIssuer": "https://cognito-idp.eu-north-1.amazonaws.com/eu-north-1_TestPool",
+            "CognitoClientId": "123exampleclient",
+            "CognitoDomain": f"https://{deploy.AUTH_PREFIX}.auth.eu-north-1.amazoncognito.com",
+            "LoginUrl": "https://example.cloudfront.net/login/",
+        }
+
+    def test_auth_outputs_reject_untrusted_issuer_and_domain(self):
+        for key, value in [
+            ("CognitoIssuer", "https://attacker.example/pool"),
+            ("CognitoDomain", "https://attacker.example"),
+            ("CognitoClientId", ""),
+        ]:
+            values = {**self.auth_outputs(), key: value}
+            with (
+                patch.object(deploy, "outputs", return_value=values),
+                self.assertRaises(RuntimeError),
+            ):
+                deploy.auth_values()
+
+    def test_local_configuration_contains_only_public_auth_values(self):
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(deploy, "ROOT", Path(temporary)),
+            patch.object(deploy, "guard"),
+            patch.object(deploy, "auth_values", return_value=self.auth_outputs()),
+        ):
+            path = deploy.ROOT / ".env"
+            path.write_text("POSTGRES_DB=existing\nCOGNITO_CLIENT_ID=old\n")
+            deploy.local_auth()
+            deploy.local_auth()
+            text = path.read_text()
+            self.assertIn("POSTGRES_DB=existing", text)
+            self.assertEqual(text.count("COGNITO_CLIENT_ID="), 1)
+            self.assertIn("COGNITO_CLIENT_ID=123exampleclient", text)
+            self.assertNotIn("client_secret", text)
+            self.assertNotIn("AWS_ACCESS_KEY", text)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_auth_rejects_public_secret_file_before_provisioning(self):
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(deploy, "STATE", Path(temporary)),
+            patch.object(deploy, "guard"),
+            patch.object(deploy, "revision", return_value="a" * 40),
+            patch.object(
+                deploy,
+                "outputs",
+                return_value={"SiteUrl": "https://example.cloudfront.net"},
+            ),
+            patch.object(deploy, "deploy_stack") as provision,
+        ):
+            path = deploy.STATE / "google-oauth.json"
+            path.write_text("{}")
+            path.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, "permissions 0600"):
+                deploy.auth()
+            provision.assert_not_called()
+
+    def test_auth_rejects_wrong_google_redirect_without_provisioning(self):
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(deploy, "STATE", Path(temporary)),
+            patch.object(deploy, "guard"),
+            patch.object(deploy, "revision", return_value="a" * 40),
+            patch.object(
+                deploy,
+                "outputs",
+                return_value={"SiteUrl": "https://example.cloudfront.net"},
+            ),
+            patch.object(deploy, "deploy_stack") as provision,
+        ):
+            path = deploy.STATE / "google-oauth.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "web": {
+                            "client_id": "123-demo.apps.googleusercontent.com",
+                            "client_secret": "PRIVATE_FAKE_SECRET",
+                            "redirect_uris": ["https://attacker.example/callback"],
+                        }
+                    }
+                )
+            )
+            path.chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError, "exact Cognito redirect"):
+                deploy.auth()
+            provision.assert_not_called()
+
+    def test_auth_secret_is_only_passed_to_noecho_parameter(self):
+        secret = "PRIVATE_FAKE_SECRET"
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            patch.object(deploy, "STATE", Path(temporary)),
+            patch.object(deploy, "guard"),
+            patch.object(deploy, "revision", return_value="a" * 40),
+            patch.object(
+                deploy,
+                "outputs",
+                return_value={"SiteUrl": "https://example.cloudfront.net"},
+            ),
+            patch.object(deploy, "auth_values", return_value=self.auth_outputs()),
+            patch.object(deploy, "deploy_stack") as provision,
+        ):
+            path = deploy.STATE / "google-oauth.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "web": {
+                            "client_id": "123-demo.apps.googleusercontent.com",
+                            "client_secret": secret,
+                            "redirect_uris": [
+                                f"https://{deploy.AUTH_PREFIX}.auth.eu-north-1.amazoncognito.com/oauth2/idpresponse"
+                            ],
+                        }
+                    }
+                )
+            )
+            path.chmod(0o600)
+            deploy.auth()
+            self.assertEqual(provision.call_args.args[2]["GoogleClientSecret"], secret)
+            manifest = (deploy.STATE / "deployment.json").read_text()
+            self.assertNotIn(secret, manifest)
+            self.assertNotIn("client_secret", manifest)
 
 
 if __name__ == "__main__":

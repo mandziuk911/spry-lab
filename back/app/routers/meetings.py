@@ -3,11 +3,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
+from app.auth import require_access_token
 from app.db import get_db
 from app.schemas import MeetingCreate, MeetingRead
 from app.services import meetings as service
 
-router = APIRouter(prefix="/meetings", tags=["meetings"])
+router = APIRouter(prefix="/meetings", tags=["meetings"], dependencies=[Depends(require_access_token)])
 
 
 @router.get("", response_model=list[MeetingRead])

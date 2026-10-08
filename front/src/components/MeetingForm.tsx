@@ -1,20 +1,29 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { FormEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { createMeeting } from "@/lib/api"
+import { useSession, assertSession } from "@/lib/session"
+import { readDraft, saveDraft, clearDraft } from "@/lib/drafts"
 
 interface Props {
   onCreated: () => Promise<void>
 }
 
 export function MeetingForm({ onCreated }: Props) {
-  const [title, setTitle] = useState("")
-  const [start, setStart] = useState("")
-  const [end, setEnd] = useState("")
-  const [count, setCount] = useState("0")
+  const session = useSession()
+  const [draft] = useState(() => readDraft(session.key))
+  const [title, setTitle] = useState(draft?.title || "")
+  const [start, setStart] = useState(draft?.start || "")
+  const [end, setEnd] = useState(draft?.end || "")
+  const [count, setCount] = useState(draft?.count ?? "0")
+  useEffect(() => {
+    if (!session.active) return
+    if (!title && !start && !end && count === "0") clearDraft(session.key)
+    else saveDraft(session.key, { title, start, end, count })
+  }, [session, title, start, end, count])
   const [error, setError] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const locked = useRef(false)
@@ -47,7 +56,7 @@ export function MeetingForm({ onCreated }: Props) {
     locked.current = true
     setSubmitting(true)
     try {
-      await createMeeting({
+      await createMeeting(session, {
         title: title.trim(),
         starts_at: startsAt.toISOString(),
         ends_at: endsAt.toISOString(),
@@ -61,6 +70,8 @@ export function MeetingForm({ onCreated }: Props) {
       setSubmitting(false)
       return
     }
+    assertSession(session)
+    clearDraft(session.key)
     setTitle("")
     setStart("")
     setEnd("")

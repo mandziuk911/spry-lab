@@ -5,8 +5,19 @@ import { Button } from "@/components/ui/button"
 import { deleteMeeting, listMeetings } from "@/lib/api"
 import { isMeetingVisible, useLiveNow } from "@/lib/meetingStatus"
 import type { Meeting } from "@/types"
+import { AuthGate } from "@/AuthGate"
+import { useSession } from "@/lib/session"
 
 export default function App() {
+  return (
+    <AuthGate>
+      <Workspace />
+    </AuthGate>
+  )
+}
+
+function Workspace() {
+  const session = useSession()
   const [meetings, setMeetings] = useState<Meeting[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -18,26 +29,29 @@ export default function App() {
   // Never use them as ownership or persistence: a reload reads the API afresh.
   const removed = useRef(new Set<Meeting["id"]>())
 
-  const readList = useCallback(async (signal?: AbortSignal) => {
-    const generation = ++request.current
-    const mutationAtStart = mutationGeneration.current
-    const removedAtStart = new Set(removed.current)
-    try {
-      const result = await listMeetings(signal)
-      if (!signal?.aborted && generation === request.current) {
-        // If a deletion completed during this GET, reconcile against the newer
-        // mutation generation rather than its stale snapshot. Keep other new rows.
-        const excluded =
-          mutationAtStart === mutationGeneration.current ? removedAtStart : removed.current
-        setMeetings(result.filter((meeting) => !excluded.has(meeting.id)))
+  const readList = useCallback(
+    async (signal?: AbortSignal) => {
+      const generation = ++request.current
+      const mutationAtStart = mutationGeneration.current
+      const removedAtStart = new Set(removed.current)
+      try {
+        const result = await listMeetings(session, signal)
+        if (!signal?.aborted && generation === request.current) {
+          // If a deletion completed during this GET, reconcile against the newer
+          // mutation generation rather than its stale snapshot. Keep other new rows.
+          const excluded =
+            mutationAtStart === mutationGeneration.current ? removedAtStart : removed.current
+          setMeetings(result.filter((meeting) => !excluded.has(meeting.id)))
+        }
+      } catch {
+        if (!signal?.aborted && generation === request.current)
+          setError("Could not load meetings. Please try again.")
+      } finally {
+        if (!signal?.aborted && generation === request.current) setLoading(false)
       }
-    } catch {
-      if (!signal?.aborted && generation === request.current)
-        setError("Could not load meetings. Please try again.")
-    } finally {
-      if (!signal?.aborted && generation === request.current) setLoading(false)
-    }
-  }, [])
+    },
+    [session],
+  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -57,7 +71,7 @@ export default function App() {
   }
 
   async function onDelete(meeting: Meeting) {
-    const result = await deleteMeeting(meeting.id)
+    const result = await deleteMeeting(session, meeting.id)
     removed.current.add(meeting.id)
     mutationGeneration.current += 1
     setMeetings((current) => current.filter((item) => item.id !== meeting.id))
@@ -80,7 +94,8 @@ export default function App() {
           <span className="window-icon" aria-hidden="true">
             S
           </span>
-          <span>Spry Meeting Desk</span>
+          <span className="session-label">Spry Meeting Desk · {session.email}</span>
+          <Button onClick={session.logout}>Sign out</Button>
           <span className="window-controls" aria-hidden="true">
             <span>―</span>
             <span>□</span>
@@ -126,7 +141,7 @@ export default function App() {
                 Make a big connection.
               </p>
               <p className="access-note">
-                No accounts: anyone with API access can delete meetings.
+                Shared authenticated desk: any signed-in user can delete meetings.
               </p>
             </aside>
             <section
@@ -180,7 +195,7 @@ export default function App() {
         </main>
         <footer id="desk-notes" className="desk-footer">
           <span>All times are local · {timezone}</span>
-          <span>Spry · Shared desk, no accounts</span>
+          <span>Spry · Shared authenticated desk</span>
         </footer>
       </div>
     </div>

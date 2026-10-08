@@ -21,6 +21,15 @@ Parameters:
     NoEcho: true
     AllowedPattern: "[0-9a-fA-F]{64}"
     Description: Secret 64-hex CloudFront X-Spry-Origin header value.
+  CognitoIssuer:
+    Type: String
+    AllowedPattern: "https://cognito-idp\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9-]+_[A-Za-z0-9]+"
+    Description: Required trusted user-pool issuer from the auth stack.
+  CognitoClientId:
+    Type: String
+    AllowedPattern: "[a-z0-9]{1,128}"
+    MinLength: 1
+    Description: Required public SPA client ID from the auth stack.
   CloudFrontPrefixListId:
     Type: String
     AllowedPattern: "pl-[0-9a-f]+"
@@ -281,6 +290,10 @@ Resources:
           Environment:
             - Name: CORS_ORIGINS
               Value: ""
+            - Name: COGNITO_ISSUER
+              Value: !Ref CognitoIssuer
+            - Name: COGNITO_CLIENT_ID
+              Value: !Ref CognitoClientId
           Secrets:
             - Name: DATABASE_URL
               ValueFrom: !Ref DatabaseUrlSecret
