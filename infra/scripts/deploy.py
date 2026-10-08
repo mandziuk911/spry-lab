@@ -5,6 +5,7 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT = "673478369996"
 REGION = "eu-north-1"
 PROJECT = "spry"
+AUTH_PREFIX = "spry-lab-673478369996"
 STATE = Path.home() / ".local" / "state" / "spry-aws"
 ENV = {
     **os.environ,
@@ -180,6 +182,93 @@ def deploy_stack(name, template, parameters):
         )
 
 
+def auth_values():
+    values = outputs("auth")
+    issuer = values["CognitoIssuer"]
+    client = values["CognitoClientId"]
+    domain = values["CognitoDomain"]
+    if not re.fullmatch(
+        rf"https://cognito-idp\.{REGION}\.amazonaws\.com/{REGION}_[A-Za-z0-9]+",
+        issuer,
+    ) or not re.fullmatch(r"[a-z0-9]{1,128}", client):
+        raise RuntimeError("Invalid public Cognito configuration; refusing deployment")
+    if domain != f"https://{AUTH_PREFIX}.auth.{REGION}.amazoncognito.com":
+        raise RuntimeError("Unexpected Cognito login domain; refusing deployment")
+    return values
+
+
+def auth():
+    guard()
+    revision()
+    site = outputs("frontend")["SiteUrl"]
+    if not re.fullmatch(r"https://[a-z0-9]+\.cloudfront\.net", site):
+        raise RuntimeError("Unexpected frontend origin; refusing auth registration")
+    credentials_path = STATE / "google-oauth.json"
+    if credentials_path.stat().st_mode & 0o077:
+        raise RuntimeError("Private Google OAuth input must have permissions 0600")
+    credentials = json.loads(credentials_path.read_text())
+    web = credentials.get("web", credentials)
+    client = web.get("client_id", "")
+    secret = web.get("client_secret", "")
+    redirect = (
+        f"https://{AUTH_PREFIX}.auth.{REGION}.amazoncognito.com/oauth2/idpresponse"
+    )
+    if not re.fullmatch(r"[0-9]+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com", client):
+        raise RuntimeError("Invalid Google OAuth client ID")
+    if not isinstance(secret, str) or len(secret) < 10 or secret != secret.strip():
+        raise RuntimeError("Missing or invalid private Google OAuth secret")
+    if redirect not in web.get("redirect_uris", []):
+        raise RuntimeError("Google OAuth input lacks the exact Cognito redirect URI")
+    deploy_stack(
+        "auth",
+        "auth.yaml",
+        {
+            "ProjectName": PROJECT,
+            "SiteUrl": site,
+            "DomainPrefix": AUTH_PREFIX,
+            "GoogleClientId": client,
+            "GoogleClientSecret": secret,
+        },
+    )
+    values = auth_values()
+    save_manifest(
+        {
+            "auth_pool_id": values["UserPoolId"],
+            "auth_issuer": values["CognitoIssuer"],
+            "auth_client_id": values["CognitoClientId"],
+            "login_url": values["LoginUrl"],
+        }
+    )
+    guard()
+    print(f"Cognito configured; start sign-in at {values['LoginUrl']}", flush=True)
+
+
+def local_auth():
+    guard()
+    values = auth_values()
+    pairs = {
+        "COGNITO_ISSUER": values["CognitoIssuer"],
+        "COGNITO_CLIENT_ID": values["CognitoClientId"],
+        "COGNITO_DOMAIN": values["CognitoDomain"],
+    }
+    path = ROOT / ".env"
+    lines = path.read_text().splitlines() if path.exists() else []
+    present = set()
+    for index, line in enumerate(lines):
+        key = line.partition("=")[0]
+        if key in pairs:
+            lines[index] = f"{key}={pairs[key]}"
+            present.add(key)
+    lines.extend(f"{key}={value}" for key, value in pairs.items() if key not in present)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.chmod(path, 0o600)
+    with os.fdopen(descriptor, "w") as stream:
+        stream.write("\n".join(lines) + "\n")
+    print(
+        "Updated ignored .env with public Cognito settings; no AWS keys or Google secret"
+    )
+
+
 def prefix_list():
     items = aws(
         "ec2",
@@ -197,6 +286,7 @@ def prefix_list():
 def backend():
     guard()
     sha = revision()
+    authentication = auth_values()
     deploy_stack("backend-ecr", "backend-ecr.yaml", {"ProjectName": PROJECT})
     repository = outputs("backend-ecr")["RepositoryUri"]
     image = f"{repository}:{sha}"
@@ -237,9 +327,12 @@ def backend():
         "DesiredCount": 0,
         "OriginToken": token(),
         "CloudFrontPrefixListId": prefix_list(),
+        "CognitoIssuer": authentication["CognitoIssuer"],
+        "CognitoClientId": authentication["CognitoClientId"],
     }
-    # Demo deployments intentionally pause the service while migrating. A failure
-    # retains database/resources and leaves serving disabled for explicit recovery.
+    # Commit a zero-count maintenance boundary with the previous template first.
+    # A later template rollback must not restore the old serving count/image.
+    maintenance_boundary()
     deploy_stack("backend", "backend.yaml", parameters)
     values = outputs("backend")
     network = {
@@ -332,6 +425,110 @@ def backend():
     print("Backend deployed; public access is through CloudFront only", flush=True)
 
 
+def maintenance_boundary():
+    existing = aws("cloudformation", "list-stacks")["StackSummaries"]
+    if not any(
+        item["StackName"] == f"{PROJECT}-backend"
+        and item["StackStatus"] != "DELETE_COMPLETE"
+        for item in existing
+    ):
+        return  # New stacks start with desired count zero.
+    previous = stack("backend")
+    if previous["StackStatus"] not in {
+        "CREATE_COMPLETE",
+        "UPDATE_COMPLETE",
+        "UPDATE_ROLLBACK_COMPLETE",
+    }:
+        raise RuntimeError("Backend stack needs explicit recovery before deployment")
+    parameters = previous["Parameters"]
+    if not any(p["ParameterKey"] == "DesiredCount" for p in parameters):
+        raise RuntimeError("Cannot establish the backend maintenance boundary")
+    if (
+        next(
+            p["ParameterValue"]
+            for p in parameters
+            if p["ParameterKey"] == "DesiredCount"
+        )
+        != "0"
+    ):
+        with tempfile.TemporaryDirectory(prefix="spry-maintenance-") as directory:
+            path = Path(directory) / "parameters.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "ParameterKey": p["ParameterKey"],
+                            **(
+                                {"ParameterValue": "0"}
+                                if p["ParameterKey"] == "DesiredCount"
+                                else {"UsePreviousValue": True}
+                            ),
+                        }
+                        for p in parameters
+                    ]
+                )
+            )
+            path.chmod(0o600)
+            execute(
+                [
+                    "aws",
+                    "cloudformation",
+                    "update-stack",
+                    "--stack-name",
+                    f"{PROJECT}-backend",
+                    "--use-previous-template",
+                    "--parameters",
+                    f"file://{path}",
+                    "--capabilities",
+                    "CAPABILITY_IAM",
+                ],
+                capture=True,
+            )
+            execute(
+                [
+                    "aws",
+                    "cloudformation",
+                    "wait",
+                    "stack-update-complete",
+                    "--stack-name",
+                    f"{PROJECT}-backend",
+                ]
+            )
+    values = outputs("backend")
+    aws(
+        "ecs",
+        "update-service",
+        "--cluster",
+        values["ClusterName"],
+        "--service",
+        values["ServiceName"],
+        "--desired-count",
+        "0",
+    )
+    execute(
+        [
+            "aws",
+            "ecs",
+            "wait",
+            "services-stable",
+            "--cluster",
+            values["ClusterName"],
+            "--services",
+            values["ServiceName"],
+        ]
+    )
+    service = aws(
+        "ecs",
+        "describe-services",
+        "--cluster",
+        values["ClusterName"],
+        "--services",
+        values["ServiceName"],
+    )["services"][0]
+    if service["desiredCount"] != 0 or service["runningCount"] != 0:
+        raise RuntimeError("Maintenance boundary did not stop serving")
+
+
 def save_manifest(values):
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = STATE / "deployment.json"
@@ -341,10 +538,50 @@ def save_manifest(values):
     path.chmod(0o600)
 
 
+def verify_protected_backend(authentication):
+    parameters = {
+        item["ParameterKey"]: item.get("ParameterValue")
+        for item in stack("backend").get("Parameters", [])
+    }
+    if (
+        parameters.get("CognitoIssuer") != authentication["CognitoIssuer"]
+        or parameters.get("CognitoClientId") != authentication["CognitoClientId"]
+        or parameters.get("DesiredCount") != "1"
+    ):
+        raise RuntimeError("Protected backend must be deployed before frontend")
+    site = outputs("frontend")["SiteUrl"]
+    if not re.fullmatch(r"https://[a-z0-9]+\.cloudfront\.net", site):
+        raise RuntimeError("Unexpected site origin")
+    # Use the platform CA store via curl; TLS verification is never disabled.
+    response = execute(
+        [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--max-time",
+            "20",
+            "--include",
+            "--write-out",
+            "\\n%{http_code}",
+            site + "/api/meetings",
+        ],
+        capture=True,
+    )
+    content, status = response.rsplit("\n", 1)
+    if status != "401" or not re.search(
+        r"(?im)^www-authenticate:\s*Bearer\s*$", content
+    ):
+        raise RuntimeError("API authentication probe failed")
+    if json.loads(content.split("\n\n", 1)[1]).get("detail") != "Unauthorized":
+        raise RuntimeError("API authentication probe did not return JSON 401")
+
+
 def frontend():
     guard()
     sha = revision()
+    authentication = auth_values()
     backend_values = outputs("backend")
+    verify_protected_backend(authentication)
     deploy_stack(
         "frontend",
         "frontend.yaml",
@@ -369,6 +606,12 @@ def frontend():
                 "/project/front",
                 "-e",
                 "VITE_API_URL=/",
+                "-e",
+                f"VITE_COGNITO_ISSUER={authentication['CognitoIssuer']}",
+                "-e",
+                f"VITE_COGNITO_CLIENT_ID={authentication['CognitoClientId']}",
+                "-e",
+                f"VITE_COGNITO_DOMAIN={authentication['CognitoDomain']}",
                 "node:24.0.0-bookworm-slim",
                 "sh",
                 "-c",
@@ -445,10 +688,19 @@ def frontend():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("target", choices=["check", "backend", "frontend", "outputs"])
+    parser.add_argument(
+        "target",
+        choices=["check", "auth", "local-auth", "backend", "frontend", "outputs"],
+    )
     target = parser.parse_args().target
     if target == "check":
         guard()
+    elif target == "auth":
+        with deployment_lock():
+            auth()
+    elif target == "local-auth":
+        with deployment_lock():
+            local_auth()
     elif target == "backend":
         with deployment_lock():
             backend()

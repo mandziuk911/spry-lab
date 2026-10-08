@@ -1,0 +1,129 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Spry Cognito Essentials password and Google sign-in for a public PKCE client.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: spry
+    AllowedPattern: "[a-z][a-z0-9-]{0,25}"
+  SiteUrl:
+    Type: String
+    AllowedPattern: "https://[a-z0-9]+\\.cloudfront\\.net"
+    Description: Existing HTTPS site origin without a trailing slash.
+  DomainPrefix:
+    Type: String
+    Default: spry-lab-673478369996
+    AllowedPattern: "[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"
+  GoogleClientId:
+    Type: String
+    AllowedPattern: "[0-9]+-[a-zA-Z0-9_-]+\\.apps\\.googleusercontent\\.com"
+  GoogleClientSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 10
+    Description: Private Google OAuth web-client secret, never a frontend value.
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub "${ProjectName}-users"
+      UserPoolTier: ESSENTIALS
+      DeletionProtection: ACTIVE
+      UsernameAttributes: [email]
+      UsernameConfiguration:
+        CaseSensitive: false
+      AutoVerifiedAttributes: [email]
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          TemporaryPasswordValidityDays: 7
+      MfaConfiguration: "OFF"
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+      UserPoolTags:
+        PROJECT_NAME: !Ref ProjectName
+
+  GoogleProvider:
+    Type: AWS::Cognito::UserPoolIdentityProvider
+    Properties:
+      UserPoolId: !Ref UserPool
+      ProviderName: Google
+      ProviderType: Google
+      ProviderDetails:
+        client_id: !Ref GoogleClientId
+        client_secret: !Ref GoogleClientSecret
+        authorize_scopes: "openid email profile"
+      AttributeMapping:
+        email: email
+        email_verified: email_verified
+
+  AppClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn: GoogleProvider
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: !Sub "${ProjectName}-web"
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO, Google]
+      CallbackURLs:
+        - !Sub "${SiteUrl}/auth/callback/"
+        - "http://localhost:5173/auth/callback/"
+      LogoutURLs:
+        - !Sub "${SiteUrl}/"
+        - "http://localhost:5173/"
+      AccessTokenValidity: 15
+      IdTokenValidity: 15
+      RefreshTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+        RefreshToken: days
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Ref DomainPrefix
+      ManagedLoginVersion: 2
+
+  LoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    DependsOn: UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref AppClient
+      UseCognitoProvidedValues: true
+
+Outputs:
+  UserPoolId:
+    Value: !Ref UserPool
+  CognitoIssuer:
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+  CognitoClientId:
+    Value: !Ref AppClient
+  CognitoDomain:
+    Value: !Sub "https://${DomainPrefix}.auth.${AWS::Region}.amazoncognito.com"
+  LoginUrl:
+    Value: !Sub "${SiteUrl}/login/"
