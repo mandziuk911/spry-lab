@@ -192,7 +192,7 @@ Resources:
                 Action: s3:GetObject
                 Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-reports-${AWS::AccountId}/reports/*"
               - Effect: Allow
-                Action: ses:SendEmail
+                Action: [ses:SendEmail, ses:SendRawEmail]
                 Resource: !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${ReportEmail}"
       Tags:
         - {Key: Project, Value: !Ref ProjectName}
