@@ -54,6 +54,24 @@ Resources:
         SigningBehavior: always
         SigningProtocol: sigv4
 
+  AuthRoutes:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub "${ProjectName}-auth-routes"
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Serve only the known SPA authentication routes, never API errors.
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          if (request.uri === '/login' || request.uri === '/login/' ||
+              request.uri === '/auth/callback' || request.uri === '/auth/callback/') {
+            request.uri = '/index.html';
+          }
+          return request;
+        }
+
   Distribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -91,6 +109,9 @@ Resources:
           Compress: true
           # Managed CachingOptimized policy.
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt AuthRoutes.FunctionARN
         # No OriginPath or URI rewrite: preserve /api paths and query strings.
         CacheBehaviors:
           - PathPattern: /api

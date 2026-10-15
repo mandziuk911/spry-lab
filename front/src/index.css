@@ -83,6 +83,11 @@
   background: linear-gradient(#73b1ff, #2475dc 12%, #165cbb 65%, #094390);
   border-bottom: 1px solid #063474;
 }
+.session-label {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
 .window-icon {
   background: #f4f1df;
   color: #165cbb;

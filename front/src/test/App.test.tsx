@@ -1,3 +1,4 @@
+import "@/test/authFixture"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -73,7 +74,7 @@ describe("meeting page", () => {
       expect(fetch).toHaveBeenCalledTimes(2)
       expect(fetch.mock.calls[1]).toEqual([
         expect.stringContaining(`/api/meetings/${meeting.id}`),
-        { method: "DELETE" },
+        { method: "DELETE", headers: { Authorization: "Bearer fixture-access" } },
       ])
       expect(parse).not.toHaveBeenCalled()
       expect(screen.getByRole("heading", { name: /Your meetings/ })).toHaveFocus()
