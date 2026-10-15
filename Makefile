@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 AWS_PROFILE ?= $(if $(AWS_SESSION_TOKEN),,spry)
 
-.PHONY: help start up down logs ps test test-back test-front lint format aws-check auth-config deploy deploy-auth deploy-backend deploy-frontend aws-outputs
+.PHONY: help start up down logs ps test test-back test-front lint format aws-check auth-config deploy deploy-auth deploy-backend deploy-frontend deploy-reports report-now report-ls report-schedule-test aws-outputs
 
 help: ## Show commands; deploys use temporary aws login credentials, never .env keys
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -59,6 +59,18 @@ deploy-backend: ## Push exact SHA image, provision ECS/RDS, migrate once and ena
 
 deploy-frontend: ## Provision private S3/CloudFront, publish same-origin frontend and wait
 	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py frontend
+
+deploy-reports: ## Deploy Lab 5 weekly report Lambdas, schedule, SQS, S3 and sandbox SES identity
+	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py reports
+
+report-now: ## Queue an on-demand report (optional WEEK=YYYY-Www; defaults to previous ISO week)
+	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py report-now $(if $(WEEK),--week $(WEEK),)
+
+report-ls: ## List generated reports for Lab 5 evidence
+	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py report-ls
+
+report-schedule-test: ## Fire one real one-shot Scheduler event for acceptance (auto-deletes)
+	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py report-schedule-test
 
 aws-outputs: ## Show public AWS URLs and deployed SHAs without secrets
 	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py outputs

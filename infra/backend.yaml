@@ -410,3 +410,11 @@ Outputs:
     Value: !Ref Database
   DatabaseUrlSecretArn:
     Value: !Ref DatabaseUrlSecret
+  VpcId:
+    Value: !Ref Vpc
+  PrivateRouteTableId:
+    Value: !Ref PrivateRouteTable
+  PrivateSubnetIds:
+    Value: !Join [",", [!Ref PrivateSubnet1, !Ref PrivateSubnet2]]
+  DatabaseSecurityGroupId:
+    Value: !Ref DatabaseSecurityGroup

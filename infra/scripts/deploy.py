@@ -11,6 +11,7 @@ import sys
 import tarfile
 import tempfile
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -686,13 +687,180 @@ def frontend():
     print(f"Frontend: {values['SiteUrl']}\nAPI: {values['SiteUrl']}/api", flush=True)
 
 
+def reports():
+    guard()
+    sha = revision()
+    backend_values = outputs("backend")
+    authentication = auth_values()
+    email_path = STATE / "report-email.json"
+    if email_path.stat().st_mode & 0o077:
+        raise RuntimeError("Report recipient config must have permissions 0600")
+    email = json.loads(email_path.read_text()).get("email", "")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise RuntimeError("Invalid report email identity")
+
+    deploy_stack("reports-ecr", "reports-ecr.yaml", {"ProjectName": PROJECT})
+    repository = outputs("reports-ecr")["RepositoryUri"]
+    registry = repository.split("/", 1)[0]
+    password = execute(
+        ["aws", "ecr", "get-login-password", "--region", REGION], capture=True
+    )
+    execute(
+        ["docker", "login", "--username", "AWS", "--password-stdin", registry],
+        input=password + "\n",
+        capture=True,
+    )
+    image = f"{repository}:{sha}"
+    with source_snapshot(sha) as source:
+        execute(
+            [
+                "docker",
+                "buildx",
+                "build",
+                "--platform",
+                "linux/arm64",
+                "--provenance=false",
+                "--push",
+                "--tag",
+                image,
+                "--file",
+                str(source / "back/Dockerfile.lambda"),
+                str(source / "back"),
+            ]
+        )
+    deploy_stack(
+        "reports",
+        "reports.yaml",
+        {
+            "ProjectName": PROJECT,
+            "ImageUri": image,
+            "VpcId": backend_values["VpcId"],
+            "PrivateSubnetIds": backend_values["PrivateSubnetIds"],
+            "PrivateRouteTableId": backend_values["PrivateRouteTableId"],
+            "DatabaseSecurityGroupId": backend_values["DatabaseSecurityGroupId"],
+            "DatabaseUrlSecretArn": backend_values["DatabaseUrlSecretArn"],
+            "ReportEmail": email,
+            "CognitoIssuer": authentication["CognitoIssuer"],
+            "CognitoClientId": authentication["CognitoClientId"],
+        },
+    )
+    save_manifest(
+        {"reports_sha": sha, "reports_bucket": outputs("reports")["ReportsBucketName"]}
+    )
+    status = aws("sesv2", "get-email-identity", "--email-identity", email).get(
+        "VerificationStatus", "PENDING"
+    )
+    print(
+        f"Reports deployed. SES email identity status: {status}. Verify the message AWS sent before sending reports."
+    )
+
+
+def ensure_report_email_verified():
+    path = STATE / "report-email.json"
+    if path.stat().st_mode & 0o077:
+        raise RuntimeError("Report recipient config must have permissions 0600")
+    email = json.loads(path.read_text()).get("email", "")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise RuntimeError("Invalid report email identity")
+    status = aws("sesv2", "get-email-identity", "--email-identity", email).get(
+        "VerificationStatus"
+    )
+    if status != "SUCCESS":
+        raise RuntimeError(
+            "SES email identity is not verified; refusing to create an unsendable report"
+        )
+    return email
+
+
+def report_now(week):
+    guard()
+    ensure_report_email_verified()
+    if week:
+        from datetime import date
+
+        match = re.fullmatch(r"(\d{4})-W(\d{2})", week)
+        if not match:
+            raise RuntimeError("WEEK must use ISO format YYYY-Www")
+        date.fromisocalendar(int(match.group(1)), int(match.group(2)), 1)
+    else:
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+
+        local_day = datetime.now(ZoneInfo("Europe/Kyiv")).date() - timedelta(days=7)
+        year, number, _ = local_day.isocalendar()
+        week = f"{year}-W{number:02d}"
+    queue = outputs("reports")["ReportQueueUrl"]
+    message = json.dumps({"week": week, "source": "sqs"}, separators=(",", ":"))
+    response = aws(
+        "sqs", "send-message", "--queue-url", queue, "--message-body", message
+    )
+    print(f"Queued report {week}; message id {response['MessageId']}")
+
+
+def report_list():
+    guard()
+    bucket = outputs("reports")["ReportsBucketName"]
+    execute(["aws", "s3", "ls", f"s3://{bucket}/reports/", "--recursive"])
+
+
+def report_schedule_test():
+    """Create a one-shot real Scheduler trigger, self-deleted after completion."""
+    guard()
+    ensure_report_email_verified()
+    values = outputs("reports")
+    when = datetime.now(UTC) + timedelta(minutes=2)
+    expression = f"at({when.strftime('%Y-%m-%dT%H:%M:%S')})"
+    target = json.dumps(
+        {
+            "Arn": values["ReportQueueArn"],
+            "RoleArn": values["ScheduleRoleArn"],
+            "Input": '{"week":null,"source":"schedule"}',
+        }
+    )
+    name = f"spry-report-acceptance-{int(when.timestamp())}"
+    aws(
+        "scheduler",
+        "create-schedule",
+        "--name",
+        name,
+        "--schedule-expression",
+        expression,
+        "--schedule-expression-timezone",
+        "UTC",
+        "--flexible-time-window",
+        '{"Mode":"OFF"}',
+        "--target",
+        target,
+        "--action-after-completion",
+        "DELETE",
+        "--description",
+        "One-shot Lab 5 acceptance; auto-delete after firing",
+    )
+    print(
+        f"One-shot scheduler acceptance created for {expression} UTC; it auto-deletes after firing."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "target",
-        choices=["check", "auth", "local-auth", "backend", "frontend", "outputs"],
+        choices=[
+            "check",
+            "auth",
+            "local-auth",
+            "backend",
+            "frontend",
+            "outputs",
+            "reports",
+            "report-now",
+            "report-ls",
+            "report-schedule-test",
+        ],
     )
-    target = parser.parse_args().target
+    parser.add_argument("--week", help="ISO week YYYY-Www for report-now")
+    arguments = parser.parse_args()
+    target = arguments.target
     if target == "check":
         guard()
     elif target == "auth":
@@ -707,6 +875,15 @@ def main():
     elif target == "frontend":
         with deployment_lock():
             frontend()
+    elif target == "reports":
+        with deployment_lock():
+            reports()
+    elif target == "report-now":
+        report_now(arguments.week)
+    elif target == "report-ls":
+        report_list()
+    elif target == "report-schedule-test":
+        report_schedule_test()
     else:
         guard()
         path = STATE / "deployment.json"

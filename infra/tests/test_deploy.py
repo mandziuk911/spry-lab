@@ -82,6 +82,33 @@ class DeploymentSafetyTests(unittest.TestCase):
         ):
             deploy.guard()
 
+    def test_report_email_pending_refuses_enqueue(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            email_path = state / "report-email.json"
+            email_path.write_text('{"email":"student@example.edu"}')
+            email_path.chmod(0o600)
+            with (
+                patch.object(deploy, "STATE", state),
+                patch.object(
+                    deploy, "aws", return_value={"VerificationStatus": "PENDING"}
+                ),
+                self.assertRaisesRegex(RuntimeError, "not verified"),
+            ):
+                deploy.ensure_report_email_verified()
+
+    def test_report_email_config_must_be_private(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            email_path = state / "report-email.json"
+            email_path.write_text('{"email":"student@example.edu"}')
+            email_path.chmod(0o644)
+            with (
+                patch.object(deploy, "STATE", state),
+                self.assertRaisesRegex(RuntimeError, "permissions 0600"),
+            ):
+                deploy.ensure_report_email_verified()
+
     def test_origin_secret_is_stable_and_private(self):
         with (
             tempfile.TemporaryDirectory() as temporary,
