@@ -1,8 +1,13 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 AWS_PROFILE ?= $(if $(AWS_SESSION_TOKEN),,spry)
+PARSER_MODEL ?= us.amazon.nova-micro-v1:0
+PARSER_REGION ?= us-east-1
+export AWS_PROFILE PARSER_MODEL PARSER_REGION TEXT
 
 .PHONY: help start up down logs ps test test-back test-front lint format aws-check auth-config deploy deploy-auth deploy-backend deploy-frontend deploy-reports report-now report-ls report-schedule-test aws-outputs
+
+.PHONY: llm-hello parse parse-eval deploy-ai destroy-ai
 
 help: ## Show commands; deploys use temporary aws login credentials, never .env keys
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -71,6 +76,21 @@ report-ls: ## List generated reports for Lab 5 evidence
 
 report-schedule-test: ## Fire one real one-shot Scheduler event for acceptance (auto-deletes)
 	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py report-schedule-test
+
+llm-hello: ## Make one real Bedrock call; print answer, stop reason and usage
+	cd back && .venv/bin/python -m app.ai.cli hello
+
+parse: ## Parse TEXT="..." locally via Bedrock; never save a meeting
+	cd back && .venv/bin/python -m app.ai.cli parse
+
+parse-eval: ## Evaluate five real inputs and write Markdown, full JSON and table.png
+	cd back && .venv/bin/python -m app.ai.cli eval
+
+deploy-ai: ## Deploy isolated parser, Function URL and $5 budget using existing stack outputs
+	bash scripts/deploy-ai.sh
+
+destroy-ai: ## Remove only AI resources after explicit confirmation; leave app/auth/reports alone
+	bash scripts/destroy-ai.sh
 
 aws-outputs: ## Show public AWS URLs and deployed SHAs without secrets
 	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py outputs

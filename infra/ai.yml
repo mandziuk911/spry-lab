@@ -1,0 +1,138 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Spry agenda parser in us-east-1. Budget alerts are not a spending cap.
+Parameters:
+  ImageUri:
+    Type: String
+    AllowedPattern: '[0-9]{12}\.dkr\.ecr\.us-east-1\.amazonaws\.com/spry-ai:[a-f0-9]{40}'
+  CognitoIssuer:
+    Type: String
+    AllowedPattern: 'https://cognito-idp\.eu-north-1\.amazonaws\.com/eu-north-1_[A-Za-z0-9]+'
+  CognitoClientId:
+    Type: String
+    AllowedPattern: '[a-z0-9]{1,128}'
+  SiteOrigin:
+    Type: String
+    AllowedPattern: 'https://[a-z0-9]+\.cloudfront\.net'
+  ParserModel:
+    Type: String
+    Default: us.amazon.nova-micro-v1:0
+    Description: US cross-region inference profile ID; model availability and quotas require separate verification.
+    AllowedPattern: 'us\.(amazon\.nova-[a-z0-9.:-]+|anthropic\.claude-[a-z0-9.:-]+)'
+  ParserInputPricePerMillion:
+    Type: Number
+    Default: 0.035
+    MinValue: 0
+    Description: USD per million input tokens; update explicitly when changing model.
+  ParserOutputPricePerMillion:
+    Type: Number
+    Default: 0.14
+    MinValue: 0
+    Description: USD per million output tokens; estimates, not billing enforcement.
+Resources:
+  ParserLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/spry-agenda-parser
+      RetentionInDays: 14
+      Tags:
+        - {Key: Project, Value: spry}
+  ParserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: InvokeSelectedInferenceProfile
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${ParserModel}
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub
+                  - arn:${AWS::Partition}:bedrock:us-*::foundation-model/${FoundationModel}
+                  - FoundationModel: !Select [1, !Split ['us.', !Ref ParserModel]]
+                Condition:
+                  StringEquals:
+                    bedrock:InferenceProfileArn: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/${ParserModel}
+      Tags:
+        - {Key: Project, Value: spry}
+  ParserFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ParserLogs
+    Properties:
+      FunctionName: spry-agenda-parser
+      PackageType: Image
+      Architectures: [arm64]
+      Code: {ImageUri: !Ref ImageUri}
+      ImageConfig:
+        Command: [app.ai.agenda_lambda.handler]
+      Role: !GetAtt ParserRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      ReservedConcurrentExecutions: 2
+      Environment:
+        Variables:
+          PARSER_MODEL: !Ref ParserModel
+          PARSER_INPUT_PRICE_PER_MILLION: !Ref ParserInputPricePerMillion
+          PARSER_OUTPUT_PRICE_PER_MILLION: !Ref ParserOutputPricePerMillion
+          COGNITO_ISSUER: !Ref CognitoIssuer
+          COGNITO_CLIENT_ID: !Ref CognitoClientId
+      Tags:
+        - {Key: Project, Value: spry}
+  ParserUrl:
+    Type: AWS::Lambda::Url
+    Properties:
+      TargetFunctionArn: !GetAtt ParserFunction.Arn
+      AuthType: NONE
+      Cors:
+        AllowOrigins: [!Ref SiteOrigin]
+        AllowMethods: [POST]
+        AllowHeaders: [Authorization, Content-Type]
+        MaxAge: 300
+  ParserUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ParserFunction
+      Action: lambda:InvokeFunctionUrl
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+  ParserInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ParserFunction
+      Action: lambda:InvokeFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: spry-ai-monthly-alert
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: {Amount: 5, Unit: USD}
+        # Account-wide intentionally: Lambda tags do not reliably attribute
+        # shared Bedrock inference costs. This only alerts; it cannot stop spend.
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            ThresholdType: PERCENTAGE
+            Threshold: 100
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: mandzyuk.pn@ucu.edu.ua
+Outputs:
+  ParserUrl:
+    Value: !GetAtt ParserUrl.FunctionUrl
+  ParserFunctionName:
+    Value: !Ref ParserFunction

@@ -50,9 +50,10 @@ def execute(command, *, capture=False, input=None, env=None):
     return result.stdout.strip() if capture else ""
 
 
-def aws(*arguments, text=False):
+def aws(*arguments, text=False, region=REGION):
     result = execute(
-        ["aws", *arguments, "--output", "text" if text else "json"], capture=True
+        ["aws", *arguments, "--region", region, "--output", "text" if text else "json"],
+        capture=True,
     )
     return result if text else json.loads(result)
 
@@ -132,20 +133,24 @@ def token():
     return value
 
 
-def stack(name):
+def stack(name, *, region=REGION):
     return aws(
-        "cloudformation", "describe-stacks", "--stack-name", f"{PROJECT}-{name}"
+        "cloudformation",
+        "describe-stacks",
+        "--stack-name",
+        f"{PROJECT}-{name}",
+        region=region,
     )["Stacks"][0]
 
 
-def outputs(name):
+def outputs(name, *, region=REGION):
     return {
         item["OutputKey"]: item["OutputValue"]
-        for item in stack(name).get("Outputs", [])
+        for item in stack(name, region=region).get("Outputs", [])
     }
 
 
-def deploy_stack(name, template, parameters):
+def deploy_stack(name, template, parameters, *, region=REGION):
     guard()
     print(f"Deploying {PROJECT}-{name} (no destructive rollback cleanup)", flush=True)
     with tempfile.TemporaryDirectory(prefix="spry-parameters-") as directory:
@@ -168,6 +173,8 @@ def deploy_stack(name, template, parameters):
                 "aws",
                 "cloudformation",
                 "deploy",
+                "--region",
+                region,
                 "--stack-name",
                 f"{PROJECT}-{name}",
                 "--template-file",
@@ -577,10 +584,23 @@ def verify_protected_backend(authentication):
         raise RuntimeError("API authentication probe did not return JSON 401")
 
 
+def parser_url():
+    try:
+        url = outputs("ai", region="us-east-1")["ParserUrl"]
+    except (RuntimeError, KeyError, IndexError) as error:
+        raise RuntimeError(
+            "AI parser stack spry-ai in us-east-1 is required; deploy-ai first"
+        ) from error
+    if not re.fullmatch(r"https://[a-z0-9]+\.lambda-url\.us-east-1\.on\.aws/", url):
+        raise RuntimeError("Invalid AI parser URL; refusing frontend deployment")
+    return url
+
+
 def frontend():
     guard()
     sha = revision()
     authentication = auth_values()
+    parser_endpoint = parser_url()
     backend_values = outputs("backend")
     verify_protected_backend(authentication)
     deploy_stack(
@@ -607,6 +627,8 @@ def frontend():
                 "/project/front",
                 "-e",
                 "VITE_API_URL=/",
+                "-e",
+                f"VITE_PARSER_URL={parser_endpoint}",
                 "-e",
                 f"VITE_COGNITO_ISSUER={authentication['CognitoIssuer']}",
                 "-e",

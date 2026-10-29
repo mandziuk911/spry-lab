@@ -13,6 +13,8 @@ dependencies = [
     "pydantic-settings==2.15.0",
     "PyJWT[crypto]==2.15.1",
     "cryptography==50.0.2",
+    "boto3==1.43.122",
+    "anthropic[bedrock]==2.3.0",
 ]
 
 [dependency-groups]

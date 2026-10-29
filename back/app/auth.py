@@ -118,7 +118,11 @@ def require_access_token(
 ) -> dict:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise unauthorized()
-    token = credentials.credentials
+    return verify_access_token(credentials.credentials)
+
+
+def verify_access_token(token: str) -> dict:
+    """Verify an access token for both FastAPI and the isolated parser Lambda."""
     if len(token) > MAX_TOKEN_BYTES or not re.fullmatch(
         r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", token
     ):
