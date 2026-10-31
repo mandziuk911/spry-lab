@@ -7,7 +7,7 @@ export AWS_PROFILE PARSER_MODEL PARSER_REGION TEXT
 
 .PHONY: help start up down logs ps test test-back test-front lint format aws-check auth-config deploy deploy-auth deploy-backend deploy-frontend deploy-reports report-now report-ls report-schedule-test aws-outputs
 
-.PHONY: llm-hello parse parse-eval deploy-ai destroy-ai
+.PHONY: llm-hello parse parse-eval deploy-ai destroy-ai infra-fmt infra-validate infra-plan
 
 help: ## Show commands; deploys use temporary aws login credentials, never .env keys
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  %-22s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -91,6 +91,15 @@ deploy-ai: ## Deploy isolated parser, Function URL and $5 budget using existing 
 
 destroy-ai: ## Remove only AI resources after explicit confirmation; leave app/auth/reports alone
 	bash scripts/destroy-ai.sh
+
+infra-fmt: ## Check Terraform formatting without cloud access
+	terraform -chdir=infra fmt -check
+
+infra-validate: ## Validate initialized Terraform configuration without changing infrastructure
+	terraform -chdir=infra validate
+
+infra-plan: ## Preview infrastructure changes only after safe state adoption/configuration
+	terraform -chdir=infra plan
 
 aws-outputs: ## Show public AWS URLs and deployed SHAs without secrets
 	AWS_PROFILE=$(AWS_PROFILE) python3 infra/scripts/deploy.py outputs

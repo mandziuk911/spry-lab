@@ -65,6 +65,12 @@ Database readiness uses pg_isready; the backend waits for it, migrates, and repo
 
 The `spry` development credentials, Vite server, local CORS origin and published API port are for your laptop only. PostgreSQL is not published to the host. VITE settings are public browser configuration, never secrets. `.env` is ignored by Git: Cognito public settings are required, while database overrides are optional. Use AWS CLI profiles locally and OIDC for CI, not committed access keys.
 
+## Lab 7 — Terraform migration draft
+
+The Terraform files in `infra/` are a **draft, not a completed migration**. Existing CloudFormation stacks and deployment commands remain authoritative. AWS access, the HCP Terraform workspace, real import IDs and a no-changes plan have not been verified. Do not apply the draft or delete stacks; first inventory the live resources, configure a protected remote workspace and review a non-destructive import plan. See [the Lab 7 status](docs/lab7-partial-submission.md) and [ADR 0007](docs/adr/0007-terraform.md).
+
+`make infra-fmt`, `make infra-validate` and `make infra-plan` provide formatting, local validation and planning; there is intentionally no Terraform apply target. Validation requires provider initialization, while a meaningful plan additionally requires the correct workspace, variables, credentials and imported state.
+
 ## AWS deployment (Free-plan lab/demo)
 
 Prerequisites: Docker, Python 3, current AWS CLI, a clean committed checkout and temporary credentials:
