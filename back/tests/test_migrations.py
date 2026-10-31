@@ -50,7 +50,7 @@ def test_forward_migration_preserves_meetings_and_backfills(isolated_db):
         assert [row.title for row in rows] == ["Legacy 0", "Legacy 1"]
         assert [row.attendee_count for row in rows] == [2, 0]
         inspector = inspect(conn)
-        assert set(inspector.get_table_names()) == {"alembic_version", "meetings"}
+        assert set(inspector.get_table_names()) == {"alembic_version", "meetings", "meeting_agendas"}
         assert {col["name"] for col in inspector.get_columns("meetings")} == {
             "id",
             "title",
@@ -62,10 +62,11 @@ def test_forward_migration_preserves_meetings_and_backfills(isolated_db):
         conn.commit()
         with pytest.raises(RuntimeError, match="irreversible"):
             command.downgrade(config, "0003")
-        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
+        # The failed transactional downgrade rolls 0005 -> 0004 back as well.
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "0005"
         after = conn.execute(text("SELECT id, title, attendee_count FROM meetings ORDER BY title")).all()
         assert after == rows
-        assert set(inspect(conn).get_table_names()) == {"alembic_version", "meetings"}
+        assert set(inspect(conn).get_table_names()) == {"alembic_version", "meetings", "meeting_agendas"}
 
 
 @pytest.mark.parametrize(

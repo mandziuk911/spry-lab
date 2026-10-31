@@ -1,0 +1,24 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Immutable ARM64 Lambda container repository for Spry report functions.
+Parameters:
+  ProjectName:
+    Type: String
+    Default: spry
+    AllowedPattern: "[a-z][a-z0-9-]{0,25}"
+Resources:
+  ReportsRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RepositoryName: !Sub "${ProjectName}-reports"
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt ReportsRepository.RepositoryUri

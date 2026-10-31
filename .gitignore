@@ -10,3 +10,13 @@ dist/
 
 # AWS app-stack overrides (may hold account-specific values)
 infra/*.params.env
+
+# Terraform state and variable overrides may contain secrets.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+*.tfvars
+*.tfvars.json

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spry — Privacy notice</title>
+    <style>
+      body {
+        max-width: 48rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        font:
+          1rem/1.6 system-ui,
+          sans-serif;
+        color: #17345b;
+        background: #f4f1df;
+      }
+      a {
+        color: #094390;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Spry privacy notice</h1>
+      <p>
+        Spry is an educational shared-meetings application operated by Mandzyuk Sviatoslav. Contact:
+        <a href="mailto:mandzyuk.pn@ucu.edu.ua">mandzyuk.pn@ucu.edu.ua</a>.
+      </p>
+      <h2>Sign-in information</h2>
+      <p>
+        Email/password and Google sign-in use AWS Cognito. Google access is limited to OpenID
+        identity, email and basic profile information. Spry does not request access to your Gmail
+        messages, contacts, Drive files or Google Cloud resources. Cognito stores the account
+        identity and, for password accounts, manages the password; Spry's meeting API does not
+        receive your Google password.
+      </p>
+      <h2>Browser session</h2>
+      <p>
+        The browser keeps sign-in tokens and an unfinished meeting draft in tab-local
+        sessionStorage. A draft is restored only for the same Cognito identity. Explicit Sign out
+        clears the local session and saved drafts. Do not use a shared browser session for sensitive
+        information.
+      </p>
+      <h2>Shared meeting data</h2>
+      <p>
+        Meeting titles, times and attendee counts are stored in PostgreSQL on AWS. All signed-in
+        users can view, create and permanently delete any meeting. There is no private ownership or
+        automatic account linking. Do not enter sensitive personal information. Meetings hidden one
+        hour after their end remain stored unless explicitly deleted; backups can retain earlier
+        data after deletion.
+      </p>
+      <h2>Retention and service providers</h2>
+      <p>
+        Account information remains in Cognito until removed. Meeting records remain until deleted
+        or the lab is deliberately retired. AWS services may keep operational/security logs and
+        backups. Spry does not add advertising or analytics tracking or sell the identity
+        information received from Google. Contact the operator to request account removal or discuss
+        stored data; shared meetings are not attributed to individual accounts.
+      </p>
+      <p><a href="/">Return to Spry</a></p>
+    </main>
+  </body>
+</html>

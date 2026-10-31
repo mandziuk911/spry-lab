@@ -64,9 +64,15 @@ def test_all_fields_required(client, fake_db, field):
 
 def test_active_routes_only():
     paths = app.openapi()["paths"]
-    assert set(paths) == {"/api/meetings", "/api/meetings/{meeting_id}", "/api/health"}
+    assert set(paths) == {
+        "/api/meetings",
+        "/api/meetings/{meeting_id}",
+        "/api/meetings/{meeting_id}/agenda",
+        "/api/health",
+    }
     assert set(paths["/api/meetings"]) == {"get", "post"}
     assert set(paths["/api/meetings/{meeting_id}"]) == {"delete"}
+    assert set(paths["/api/meetings/{meeting_id}/agenda"]) == {"get", "post"}
 
 
 def test_health(client):
