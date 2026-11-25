@@ -1,0 +1,11 @@
+# Disabled template. Copy to cloud.tf only for a deliberately configured HCP run.
+terraform {
+  cloud {
+    hostname     = "app.terraform.io"
+    organization = "replace-with-your-hcp-organization"
+
+    workspaces {
+      name = "spry-lab9-gcp"
+    }
+  }
+}

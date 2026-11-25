@@ -1,0 +1,24 @@
+{
+  "frontend": {
+    "url": "http://127.0.0.1:5173/",
+    "status": 200,
+    "visibleMeeting": "Lab 9 Cloud Run demo"
+  },
+  "request": {
+    "method": "GET",
+    "url": "http://127.0.0.1:8080/api/meetings",
+    "status": 200
+  },
+  "response": [
+    {
+      "id": "15842400-0000-4000-8000-000000000009",
+      "title": "Lab 9 Cloud Run demo",
+      "starts_at": "2026-11-26T10:44:59.286318Z",
+      "ends_at": "2026-11-26T11:14:59.286318Z",
+      "attendee_count": 6
+    }
+  ],
+  "auth": "Ephemeral local JWT; browser session preloaded (no hosted sign-in)",
+  "browser": "Chromium 158.0.8127.38",
+  "blockedExternalRequests": []
+}

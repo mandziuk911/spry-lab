@@ -71,6 +71,59 @@ The Terraform files in `infra/` are a **draft, not a completed migration**. Exis
 
 `make infra-fmt`, `make infra-validate` and `make infra-plan` provide formatting, local validation and planning; there is intentionally no Terraform apply target. Validation requires provider initialization, while a meaningful plan additionally requires the correct workspace, variables, credentials and imported state.
 
+## Lab 9 — Google Cloud (no-account route)
+
+I took the no-GCP-account route for Lab 9. No Google Cloud deployment or URL is claimed. See [ADR 0008](docs/adr/0008-gcp.md) for the architecture and [monthly cost estimates](docs/evidence/lab9/costs.md) for the four workload profiles and free-tier assumptions.
+
+### Validate and run locally
+
+Use the standalone Terraform root with no HCP workspace configured. Initialization downloads providers; neither command needs a Google project or credentials. Skip `plan` and `apply` on this route.
+
+```bash
+terraform -chdir=gcp init -backend=false
+terraform -chdir=gcp validate
+```
+
+For the Cloud Run container smoke test, run the following from the repository root. Use fresh, disposable local data; these are local-only PostgreSQL credentials. Set `COGNITO_ISSUER`, `COGNITO_CLIENT_ID` and `COGNITO_DOMAIN` in your shell to the existing **public** app settings. Missing auth config is not a reason to disable auth.
+
+```bash
+docker network create spry-lab9
+docker run -d --name spry-lab9-db --network spry-lab9 \
+  -e POSTGRES_DB=spry -e POSTGRES_USER=spry -e POSTGRES_PASSWORD=spry postgres:16.8
+# Wait until this succeeds before running migrations:
+docker exec spry-lab9-db pg_isready -h 127.0.0.1 -U spry -d spry
+
+docker build -f back/Dockerfile.cloudrun -t spry-lab9-api back
+export DATABASE_URL='postgresql+psycopg://spry:spry@spry-lab9-db:5432/spry'
+docker run --rm --network spry-lab9 -e DATABASE_URL -e COGNITO_ISSUER -e COGNITO_CLIENT_ID \
+  spry-lab9-api alembic upgrade head
+docker run -d --name spry-lab9-api --network spry-lab9 -p 127.0.0.1:8080:8080 \
+  -e PORT=8080 -e DATABASE_URL -e COGNITO_ISSUER -e COGNITO_CLIENT_ID spry-lab9-api
+curl --fail http://localhost:8080/api/health
+```
+
+`/api/health` issues a DB query; it does not prove that signed-in meeting requests work. With Node 24, start the frontend separately (free port 5173 first):
+
+```bash
+cd front
+npm ci
+VITE_API_URL=http://localhost:8080 VITE_COGNITO_ISSUER="$COGNITO_ISSUER" \
+  VITE_COGNITO_CLIENT_ID="$COGNITO_CLIENT_ID" VITE_COGNITO_DOMAIN="$COGNITO_DOMAIN" npm run dev
+```
+
+Open `http://localhost:5173`, sign in using the existing Cognito client (localhost callback/logout must already be allowed) and confirm `GET /api/meetings` returns 200 in the browser. Do not include tokens or network authorization headers in evidence. Without a working Cognito session, report the DB health and authentication results separately; the welcome screen is not a signed-in meeting list. When done, stop/remove these two disposable containers with `docker rm -f -v spry-lab9-api spry-lab9-db` and remove their network with `docker network rm spry-lab9`.
+
+### Future live deployment (not exercised on this route)
+
+1. Follow the [GCP runbook](gcp/README.md) to bootstrap a dedicated billing-enabled project, separate deploy/runtime service accounts and protected Terraform state. Use short-lived credentials, never service account keys. Set a budget alert before provisioning; it is not a spending cap.
+2. In `gcp/`, use `terraform.tfvars.example` to set the project and region; leave `backend_image_digest` unset for the first reviewed apply. This creates Artifact Registry, Cloud SQL and Secret Manager without starting Cloud Run. Build `back/Dockerfile.cloudrun` for `linux/amd64`, push a versioned image to `backend_image_repository`, and record the pushed digest.
+3. Use the Cloud SQL Auth Proxy as described in the runbook and run `alembic upgrade head` against the empty Cloud SQL database with the database URL and public Cognito settings in the environment. Do not import AWS data or expect the HTTP image to run migrations at startup. Set the image digest, Cognito values and exact Hosting origin in `cors_origins`, review/apply the second plan, and obtain `cloud_run_url` from Terraform.
+4. Build the static Vite site with `VITE_API_URL` set to that URL plus the three `VITE_COGNITO_*` settings above; leave `VITE_PARSER_URL` unset for the core lab. Copy `front/dist/` into `gcp/public/` and use `firebase deploy --only hosting --project <project-id>` from `gcp/` after setting up Firebase Hosting. Register the Hosting origin's `/auth/callback/` and root logout URL with Cognito. **Browser access is not enabled by this Terraform draft:** it grants Cloud Run invocation only to named GCP principals. A Cognito token alone cannot pass that IAM check. To finish the live static-browser demo, review and explicitly add a browser-compatible invocation path (e.g. allow public invocation where approved while retaining and testing app-level Cognito checks, or use an authenticated proxy); CORS alone cannot grant invocation. Do not claim the hosted UI-to-database smoke test until verified end to end.
+
+The Cognito user pool/Google federation, weekly report/SES and agenda parser/Bedrock stay on AWS. The report still uses AWS data; the GCP database is independent.
+
+**Stop the database after use:** set `database_running = false` in the GCP variables and review/apply the change in `gcp/`, not `infra/`. This stops compute, not SSD/backup billing or idle public IPv4 charges, and the API loses DB access. Set it back to `true` and wait for readiness before the next demo. For permanent cleanup, preserve only the data you need, explicitly disable `database_deletion_protection` and apply that change before reviewing `terraform destroy` in `gcp/`. Clean up separately managed Firebase Hosting and any retained backups, then check Billing Reports the next day.
+
 ## AWS deployment (Free-plan lab/demo)
 
 Prerequisites: Docker, Python 3, current AWS CLI, a clean committed checkout and temporary credentials:
