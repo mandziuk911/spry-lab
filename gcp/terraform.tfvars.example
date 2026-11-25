@@ -1,0 +1,11 @@
+project_id = "spry-lab9-example"
+region     = "us-central1"
+
+# Optional second deployment stage, after pushing a linux/amd64 backend image.
+# backend_image_digest = "sha256:<64-lowercase-hex-characters>"
+# cognito_issuer       = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_Example"
+# cognito_client_id    = "replacewithpublicclientid"
+# cloud_run_invokers   = ["user:alice@example.com"]
+
+# For a live lab only: set false to stop Cloud SQL compute when not in use.
+# database_running = false

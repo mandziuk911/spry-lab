@@ -1,0 +1,17 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Same-region immutable ARM64 Lambda images for Spry AI in us-east-1.
+Resources:
+  AiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: spry-ai
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EncryptionConfiguration:
+        EncryptionType: AES256
+      Tags:
+        - {Key: Project, Value: spry}
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt AiRepository.RepositoryUri

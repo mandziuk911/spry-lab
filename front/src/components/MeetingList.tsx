@@ -1,5 +1,6 @@
 import { useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { MeetingAgenda } from "@/components/MeetingAgenda"
 import { meetingStatus, statusLabels } from "@/lib/meetingStatus"
 import type { Meeting } from "@/types"
 
@@ -14,6 +15,7 @@ function Appointment({
   now: number
   onDelete: (meeting: Meeting) => Promise<void>
 }) {
+  const [agendaOpen, setAgendaOpen] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState("")
@@ -74,6 +76,14 @@ function Appointment({
       </dl>
       <div className="appointment-tools">
         <span>Shared appointment</span>
+        <Button
+          variant="outline"
+          aria-expanded={agendaOpen}
+          aria-label={`Agenda for ${meeting.title}`}
+          onClick={() => setAgendaOpen((open) => !open)}
+        >
+          {agendaOpen ? "Close agenda" : "Agenda"}
+        </Button>
         {!confirming && (
           <Button
             ref={trigger}
@@ -85,6 +95,7 @@ function Appointment({
           </Button>
         )}
       </div>
+      {agendaOpen && <MeetingAgenda meeting={meeting} />}
       {confirming && (
         <div
           className="delete-confirm"

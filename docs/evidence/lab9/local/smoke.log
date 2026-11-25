@@ -1,0 +1,52 @@
+Spry Lab 9 local smoke | 2026-11-25T10:44:55Z
+Dedicated Docker bridge options: {"com.docker.network.bridge.enable_ip_masquerade":"false","com.docker.network.enable_ipv4":"true","com.docker.network.enable_ipv6":"false"}
+Backend image: sha256:b4b2fd8030731f5b0f6f151e92d0a5f764fbd15f8424ff3eb3b95ee7541fd575 linux/arm64; user: spry; command: ["sh","-c","exec uvicorn app.main:app --host 0.0.0.0 --port \"${PORT}\""]
+
+== Apply Alembic migrations ==
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001, Create meetings, participants and meeting_participants.
+INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002, Add starts_at and ends_at to meetings.
+INFO  [alembic.runtime.migration] Running upgrade 0002 -> 0003, Add users and meeting owners.
+INFO  [alembic.runtime.migration] Running upgrade 0003 -> 0004, Keep meetings/UUIDs, replace participant relationships with attendee counts.
+INFO  [alembic.runtime.migration] Running upgrade 0004 -> 0005, Add one independently editable agenda per meeting.
+
+== Seed and read PostgreSQL directly ==
+INSERT 0 1
+                                                          version
+---------------------------------------------------------------------------------------------------------------------------
+ PostgreSQL 16.8 (Debian 16.8-1.pgdg120+1) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 12.2.0-14) 12.2.0, 64-bit
+(1 row)
+
+ version_num
+-------------
+ 0005
+(1 row)
+
+                  id                  |        title         |           starts_at           |            ends_at            | attendee_count
+--------------------------------------+----------------------+-------------------------------+-------------------------------+----------------
+ 15842400-0000-4000-8000-000000000009 | Lab 9 Cloud Run demo | 2026-11-26 10:44:59.286318+00 | 2026-11-26 11:14:59.286318+00 |              6
+(1 row)
+
+
+== Run the image default command with PORT=8080 ==
+Fixture issuer hostname pinned to Docker JWKS container: 172.21.0.3
+127.0.0.1:8080
+Health: {"status":"ok"}
+GET /api/meetings without a token: HTTP 401
+
+== Load the built frontend in Chromium ==
+Browser loaded http://127.0.0.1:5173/ (HTTP 200); GET /api/meetings returned and rendered PostgreSQL row 15842400-0000-4000-8000-000000000009.
+
+== Uvicorn access log ==
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+INFO:     172.21.0.1:56188 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     172.21.0.1:56192 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     172.21.0.1:56196 - "GET /api/meetings HTTP/1.1" 401 Unauthorized
+INFO:     172.21.0.1:56212 - "GET /api/meetings HTTP/1.1" 200 OK
+
+== Local Cognito mock access log ==
+172.21.0.4 - - [25/Nov/2026 10:45:07] "GET /us-east-1_SpryLab9MockOnly/.well-known/jwks.json HTTP/1.1" 200 -

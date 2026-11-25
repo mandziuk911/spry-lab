@@ -1,0 +1,38 @@
+Lab 9 — no-account route, local Terraform evidence (working directory: gcp/)
+Fresh Terraform data directory and empty HOME; no Google or HCP credentials.
+No live plan/apply, cloud resources, or billing. terraform test uses mock providers.
+
+$ terraform version
+Terraform v1.13.5
+on darwin_arm64
++ provider registry.terraform.io/hashicorp/google v7.46.2
++ provider registry.terraform.io/hashicorp/random v3.9.1
+
+$ terraform fmt -check -recursive
+Formatting check passed.
+
+$ terraform init -backend=false -input=false -no-color
+Initializing provider plugins...
+- Reusing previous version of hashicorp/google from the dependency lock file
+- Reusing previous version of hashicorp/random from the dependency lock file
+- Installing hashicorp/google v7.46.2...
+- Installed hashicorp/google v7.46.2 (signed by HashiCorp)
+- Installing hashicorp/random v3.9.1...
+- Installed hashicorp/random v3.9.1 (signed by HashiCorp)
+
+Terraform has been successfully initialized!
+
+$ terraform validate -no-color
+Success! The configuration is valid.
+
+
+$ terraform test -no-color
+tests/lab9.tftest.hcl... in progress
+  run "database_and_registry_before_image"... pass
+  run "backend_private_by_default"... pass
+  run "deploy_requires_cognito_settings"... pass
+  run "public_invocation_rejected"... pass
+tests/lab9.tftest.hcl... tearing down
+tests/lab9.tftest.hcl... pass
+
+Success! 4 passed, 0 failed.

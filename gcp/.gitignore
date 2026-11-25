@@ -1,0 +1,6 @@
+/cloud.tf
+/.terraformrc
+/.firebase/
+/.firebaserc
+/firebase-debug*.log
+/public/

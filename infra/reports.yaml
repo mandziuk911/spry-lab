@@ -1,0 +1,315 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Event-driven weekly CSV reports for Spry using SQS, Lambda, S3 and sandbox SES.
+Parameters:
+  ProjectName:
+    Type: String
+    Default: spry
+    AllowedPattern: "[a-z][a-z0-9-]{0,25}"
+  ImageUri:
+    Type: String
+    AllowedPattern: "[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9][a-z0-9._/-]*:[0-9a-f]{40}"
+    Description: Immutable ARM64 Lambda image built from the full commit SHA.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+  PrivateRouteTableId:
+    Type: String
+    AllowedPattern: "rtb-[0-9a-f]+"
+  DatabaseSecurityGroupId:
+    Type: String
+    AllowedPattern: "sg-[0-9a-f]+"
+  DatabaseUrlSecretArn:
+    Type: String
+    AllowedPattern: "arn:aws:secretsmanager:eu-north-1:673478369996:secret:.+"
+  ReportEmail:
+    Type: String
+    NoEcho: true
+    AllowedPattern: "[^@\\s]+@[^@\\s]+\\.[^@\\s]+"
+    Description: User-owned verified SES sandbox sender and recipient; no domain required.
+  CognitoIssuer:
+    Type: String
+  CognitoClientId:
+    Type: String
+
+Resources:
+  ReportEmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref ReportEmail
+  ReportsBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: MailerInvokePermission
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-reports-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireReportsAfter90Days
+            Status: Enabled
+            ExpirationInDays: 90
+            Prefix: reports/
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt ReportMailer.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - {Name: prefix, Value: reports/}
+                  - {Name: suffix, Value: .csv}
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  ReportQueueDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-report-requests-dlq"
+      MessageRetentionPeriod: 1209600
+      SqsManagedSseEnabled: true
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  ReportQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${ProjectName}-report-requests"
+      VisibilityTimeout: 360
+      MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ReportQueueDlq.Arn
+        maxReceiveCount: 3
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  ReportsS3Endpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      RouteTableIds: [!Ref PrivateRouteTableId]
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  ReportBuilderSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Outbound-only report builder access to PostgreSQL and S3 gateway endpoint
+      VpcId: !Ref VpcId
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  ReportBuilderDatabaseIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt ReportBuilderSecurityGroup.GroupId
+      Description: PostgreSQL from the private report builder only
+  ReportBuilderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+      Policies:
+        - PolicyName: BuildAndStoreReports
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-reports"
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-reports-${AWS::AccountId}/reports/*"
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+                Resource: !GetAtt ReportQueue.Arn
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseUrlSecretArn
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  ReportBuilder:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-report-builder"
+      PackageType: Image
+      Architectures: [arm64]
+      Code: {ImageUri: !Ref ImageUri}
+      ImageConfig:
+        Command: [app.reports.lambda_handler.handler]
+      Role: !GetAtt ReportBuilderRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      VpcConfig:
+        SubnetIds: !Ref PrivateSubnetIds
+        SecurityGroupIds: [!GetAtt ReportBuilderSecurityGroup.GroupId]
+      Environment:
+        Variables:
+          REPORTS_BUCKET: !Sub "${ProjectName}-reports-${AWS::AccountId}"
+          DATABASE_URL: !Sub "{{resolve:secretsmanager:${DatabaseUrlSecretArn}:SecretString}}"
+          COGNITO_ISSUER: !Ref CognitoIssuer
+          COGNITO_CLIENT_ID: !Ref CognitoClientId
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  ReportMailerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: ReadAndMailReports
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer, ecr:BatchCheckLayerAvailability]
+                Resource: !Sub "arn:${AWS::Partition}:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectName}-reports"
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-reports-${AWS::AccountId}/reports/*"
+              - Effect: Allow
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: !Sub "arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${ReportEmail}"
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  ReportMailer:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-report-mailer"
+      PackageType: Image
+      Architectures: [arm64]
+      Code: {ImageUri: !Ref ImageUri}
+      ImageConfig:
+        Command: [app.reports.mailer.handler]
+      Role: !GetAtt ReportMailerRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          REPORTS_BUCKET: !Sub "${ProjectName}-reports-${AWS::AccountId}"
+          REPORT_EMAIL: !Ref ReportEmail
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  MailerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ReportMailer.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-reports-${AWS::AccountId}"
+  ReportBuilderEventMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt ReportQueue.Arn
+      FunctionName: !GetAtt ReportBuilder.Arn
+      BatchSize: 1
+      Enabled: true
+  ScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: scheduler.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: QueueWeeklyReport
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sqs:SendMessage
+                Resource: !GetAtt ReportQueue.Arn
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  WeeklySchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub "${ProjectName}-weekly-report"
+      Description: Request the previous ISO week's report every Monday morning in Kyiv.
+      State: ENABLED
+      ScheduleExpression: "cron(0 7 ? * MON *)"
+      ScheduleExpressionTimezone: Europe/Kyiv
+      FlexibleTimeWindow: {Mode: "OFF"}
+      Target:
+        Arn: !GetAtt ReportQueue.Arn
+        RoleArn: !GetAtt ScheduleRole.Arn
+        Input: '{"week":null,"source":"schedule"}'
+  ReportsDlqAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-report-dlq-not-empty"
+      AlarmDescription: Report requests require investigation after three failed deliveries.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ReportQueueDlq.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  BuilderLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-report-builder"
+      RetentionInDays: 14
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+  MailerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ProjectName}-report-mailer"
+      RetentionInDays: 14
+      Tags:
+        - {Key: Project, Value: !Ref ProjectName}
+
+Outputs:
+  ReportsBucketName:
+    Value: !Ref ReportsBucket
+  ReportQueueUrl:
+    Value: !Ref ReportQueue
+  ReportQueueArn:
+    Value: !GetAtt ReportQueue.Arn
+  BuilderFunctionName:
+    Value: !Ref ReportBuilder
+  MailerFunctionName:
+    Value: !Ref ReportMailer
+  SchedulerName:
+    Value: !Ref WeeklySchedule
+  ScheduleRoleArn:
+    Value: !GetAtt ScheduleRole.Arn

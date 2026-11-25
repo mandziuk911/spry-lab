@@ -19,8 +19,10 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-spry}:${POSTGRES_PASSWORD:-spry}@db:5432/${POSTGRES_DB:-spry}
       CORS_ORIGINS: http://localhost:5173
+      COGNITO_ISSUER: ${COGNITO_ISSUER:-}
+      COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -35,8 +37,11 @@ services:
     build: ./front
     environment:
       VITE_API_URL: http://localhost:8000
+      VITE_COGNITO_ISSUER: ${COGNITO_ISSUER:-}
+      VITE_COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}
+      VITE_COGNITO_DOMAIN: ${COGNITO_DOMAIN:-}
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     depends_on:
       backend:
         condition: service_healthy
